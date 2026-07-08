@@ -4,7 +4,7 @@
 
 # ru-finance
 
-**MCP-сервер с данными Московской биржи и Банка России плюс доменная аналитика облигаций и портфеля.**
+**MCP-сервер с данными Московской биржи и Банка России + доменная аналитика портфеля.**
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![MCP](https://img.shields.io/badge/MCP-server-1f6feb)
