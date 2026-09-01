@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
-from . import bonds, cbr, moex, portfolio, rate
+from . import bonds, cbr, moex, portfolio, rate, smartlab
 
 
 def _load_icons() -> list[Icon] | None:
@@ -121,6 +121,30 @@ def moex_query(template_id: int, vars: dict | None = None,
     Возврат: {block: [строки]}. Запасной путь, когда нет именованной ручки.
     """
     return moex.query(template_id, vars, params)
+
+
+# ─────────────────────────── Дивиденды (smart-lab.ru) ───────────────────────────
+@mcp.tool()
+def smartlab_dividends(limit: int = 50) -> list[dict]:
+    """Календарь ближайших дивидендов со smart-lab.ru (данные, не ISS).
+
+    moex_dividends не возвращает данные (эндпоинт пуст/пейволлен), поэтому берём
+    календарь с публичного портала smart-lab.ru. Возврат: {name, ticker, period,
+    dividend_rub, yield_pct, board_approved, last_buy_date, close_date,
+    payment_date, price}. dividend_rub — ₽ за акцию; yield_pct — див. доходность %.
+    """
+    return smartlab.get_upcoming_dividends(limit)
+
+
+@mcp.tool()
+def smartlab_dividend_history(ticker: str) -> list[dict]:
+    """История дивидендов по тикеру со smart-lab.ru (данные, не ISS).
+
+    Вход: ticker — тикер («SBER», «LKOH»). Возврат: список {name, ticker, period,
+    dividend_rub, yield_pct, board_approved, last_buy_date, close_date,
+    payment_date, price} для этого эмитента.
+    """
+    return smartlab.get_dividend_history(ticker)
 
 
 # ─────────────────────────── ЦБ РФ (cbrapi) ───────────────────────────

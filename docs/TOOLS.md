@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-22 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+24 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -60,6 +60,18 @@
 - **Принимает:** `template_id` (из `moex_search_endpoints`); `vars` — переменные пути (`{engine, market, board, security}`); `params` — query-параметры (`{from, till, ...}`).
 - **Возвращает:** `{block: [строки]}`.
 - **Пример:** `moex_query(322, {"engine":"stock"}, {})`
+
+### 🟢 `smartlab_dividends(limit=50)`
+Календарь ближайших дивидендов со smart-lab.ru.
+- **Принимает:** `limit` — сколько строк (по умолч. 50).
+- **Возвращает:** список `{name, ticker, period, dividend_rub, yield_pct, board_approved, last_buy_date, close_date, payment_date, price}`. `dividend_rub` — ₽ за акцию; `yield_pct` — див. доходность %.
+- **Пример:** `smartlab_dividends(limit=5)` → `[{"ticker":"YDEX","period":"2кв 2026","dividend_rub":110.0,...}, ...]`
+
+### 🟢 `smartlab_dividend_history(ticker)`
+История дивидендов по тикеру со smart-lab.ru (все выплаты по эмитенту).
+- **Принимает:** `ticker` — тикер («SBER», «LKOH»).
+- **Возвращает:** список `{ticker, date_t1, cutoff_date, period, dividend_rub, price, yield_pct}`. `dividend_rub` — ₽ за акцию; `yield_pct` — див. доходность %.
+- **Пример:** `smartlab_dividend_history("SBER")` → 18 строк, последняя: `{ticker:"SBER", period:"2025 год", dividend_rub:37.64, yield_pct:13.6}`
 
 ---
 
@@ -161,6 +173,6 @@ refresh date: 2026-06-27        # опц.
 
 - **Сеть:** `iss.moex.com` капризен (случайные таймауты) — в `session.py` зашиты ретраи. `cbr.ru` стабилен.
 - **Шаблоны ISS** грузятся один раз при старте сервера (кэш на уровне класса aioboy/moex).
-- **Дивиденды** — эндпоинт вне шаблонов aioboy, берутся прямым GET.
+- **Дивиденды** — ISS-эндпоинт `/securities/{secid}/dividends` пуст (данные не отдаётся), «правильный» эндпоинт пейволлен. Календарь и история берутся скрейпингом со smart-lab.ru (`ru_finance/smartlab.py`, кэш в памяти на 4 ч). `moex_dividends` сохранён для исторической совместимости — сейчас возвращает пустой список.
 - **G-кривая** — NSS-модель MOEX из блока `params` zcyc, узлы `a_i = a_{i-1}+0.6·1.6^(i-1)`, масштабы `b_i = 0.6·1.6^(i-1)`, параметры в б.п. (÷10000), КБД = `100·(e^GT−1)`.
 - **Соответствие ToS:** личное использование, задержанные данные, без перераспространения.
