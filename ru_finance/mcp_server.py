@@ -339,6 +339,49 @@ def moex_options_board(asset: str) -> dict:
     return moex.options_board(asset)
 
 
+@mcp.tool()
+def moex_option_quote(secid: str) -> dict:
+    """Котировка конкретного опционного инструмента.
+
+    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
+    Возврат: {secid, shortname, strike, option_type,
+    underlying_asset, underlying_settle, expiration_date, last_trade_date,
+    last, bid, offer, spread, oi, volume, settle_price, ...,
+    ГО: im_np, im_sp, im_buy}.
+    Для детального анализа конкретного опциона: премия, спред bid/offer,
+    гарантийное обеспечение.
+    """
+    return moex.option_quote(secid)
+
+
+@mcp.tool()
+def moex_option_orderbook(secid: str) -> dict:
+    """Лучшие bid/offer стакана опционного инструмента.
+
+    Полный стакан (depth-of-market) для опционов недоступен через ISS REST
+    (эндпоинт /orderbook отдаёт HTML). Возвращаем лучшие bid/offer и спред.
+
+    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
+    Возврат: {secid, bid, offer, spread, bid_depth, offer_depth}.
+    Для оценки ликвидности опционов.
+    """
+    return moex.option_orderbook(secid)
+
+
+@mcp.tool()
+def moex_option_history(secid: str, frm: str | None = None,
+                        till: str | None = None) -> list[dict]:
+    """История сделок опционного инструмента.
+
+    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...);
+    frm/till — даты 'YYYY-MM-DD' (опционально).
+    Возврат: [{tradedate, close, open, high, low, volume, value,
+    oi, oi_value, settle_price, waprice, num_trades, theor_price, change, qty}].
+    Для анализа динамики премии и OI опционов.
+    """
+    return moex.option_history(secid, frm, till)
+
+
 # ─────────────────────────── Дивиденды (smart-lab.ru) ───────────────────────────
 @mcp.tool()
 def smartlab_dividends(limit: int = 50) -> list[dict]:

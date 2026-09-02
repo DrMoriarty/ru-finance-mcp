@@ -622,17 +622,27 @@ def options_assets() -> list[dict]:
     return records(raw, "asset_volumes")
 
 
-def options_board(asset: str) -> dict:
-    """Опционная доска по базисному активу (call + put + параметры).
+def _resolve_option_underlying(asset: str) -> str | None:
+    """Найти реальный код базисного актива (фьючерсной серии) для опционной доски.
 
-    Вход: asset — код базисного ('Si', 'RTS', 'SBRF', 'GAZR'...).
-    Возвращает: {asset_info: {central_strike, underlying_settle, last_del_date},
-    calls: [{secid, strike, iv, last, bid, offer, oi, volume}],
-    puts: [同上]}.
+    Для акций (GAZP, SBER) код совпадает с тикером — statistics работает напрямую.
+    Для фьючерсов (Si, GAZR, BR) statistics требует код серии (SiU6, GZU6, BRU6),
+    а не общий код — нужен резолв через regular ISS.
     """
     raw = raw_get(
-        f"statistics/engines/futures/markets/options/assets/{asset}/optionboard",
-        {"limit": 200})
+        "engines/futures/markets/options/boards/ROPD/securities",
+        {"iss.only": "securities", "limit": 10000,
+         "securities.columns": "ASSETCODE,UNDERLYINGASSET"})
+    for row in records(raw, "securities"):
+        if row.get("ASSETCODE") == asset:
+            under = row.get("UNDERLYINGASSET")
+            if under and under != asset:
+                return under
+    return None
+
+
+def _build_optionboard(raw: dict) -> dict:
+    """Построить dict опционной доски из raw JSON ответа statistics."""
     call_rows = records(raw, "call")
     put_rows = records(raw, "put")
     asset_rows = records(raw, "asset")
@@ -651,3 +661,156 @@ def options_board(asset: str) -> dict:
                    "oi": r.get("OPENPOSITION"), "volume": r.get("VOLTODAY")}
                   for r in put_rows],
     }
+
+
+def options_board(asset: str) -> dict:
+    """Опционная доска по базисному активу (call + put + параметры).
+
+    Вход: asset — код базисного ('Si', 'GAZP', 'SBRF', 'GAZR'...).
+    Возвращает: {asset_info: {central_strike, underlying_settle, last_del_date},
+    calls: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}],
+    puts: [同]}.
+    Для фьючерсных базисных активов (Si, GAZR, BR...) автоматически
+    резолвит код серии (SiU6, GZU6...) через regular ISS.
+    """
+    raw = raw_get(
+        f"statistics/engines/futures/markets/options/assets/{asset}/optionboard",
+        {"limit": 200})
+    call_rows = records(raw, "call")
+    put_rows = records(raw, "put")
+    if call_rows or put_rows:
+        return _build_optionboard(raw)
+
+    # Фьючерсные активы: код серии != коду активу. Резолвим.
+    real = _resolve_option_underlying(asset)
+    if real and real != asset:
+        raw = raw_get(
+            f"statistics/engines/futures/markets/options/assets/{real}/optionboard",
+            {"limit": 500})
+        result = _build_optionboard(raw)
+        if result["calls"] or result["puts"]:
+            return result
+
+    # Намеренно возвращаем пустой результат — не падаем
+    return {"asset_info": {}, "calls": [], "puts": []}
+
+
+def option_quote(secid: str) -> dict:
+    """Котировка опционного инструмента (рыночные данные + спецификация).
+
+    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
+    Возвращает: {secid, shortname, strike, option_type,
+    underlying_asset, underlying_settle, expiration_date, last_trade_date,
+    last, bid, offer, oi, volume,
+    open, high, low, settle_price, num_trades,
+    im_np, im_sp, im_buy, ...}.
+    """
+    raw = raw_get(
+        f"engines/futures/markets/options/boards/ROPD/securities/{secid}",
+        {"iss.only": "securities,marketdata"})
+    sec = records(raw, "securities")
+    md = records(raw, "marketdata")
+    s = sec[0] if sec else {}
+    m = md[0] if md else {}
+    return {
+        "secid": s.get("SECID"),
+        "shortname": s.get("SHORTNAME"),
+        "secname": s.get("SECNAME"),
+        "assetcode": s.get("ASSETCODE"),
+        "option_type": s.get("OPTIONTYPE"),
+        "strike": s.get("STRIKE"),
+        "underlying_asset": s.get("UNDERLYINGASSET"),
+        "underlying_settle": s.get("UNDERLYINGSETTLEPRICE"),
+        "expiration_date": s.get("LASTDELDATE"),
+        "last_trade_date": s.get("LASTTRADEDATE"),
+        "min_step": s.get("MINSTEP"),
+        "step_price": s.get("STEPPRICE"),
+        "prev_settle": s.get("PREVSETTLEPRICE"),
+        "prev_oi": s.get("PREVOPENPOSITION"),
+        "last": m.get("LAST"),
+        "bid": m.get("BID"),
+        "offer": m.get("OFFER"),
+        "spread": m.get("SPREAD"),
+        "open": m.get("OPEN"),
+        "high": m.get("HIGH"),
+        "low": m.get("LOW"),
+        "volume": m.get("VOLTODAY"),
+        "value": m.get("VALTODAY"),
+        "num_trades": m.get("NUMTRADES"),
+        "oi": m.get("OPENPOSITION"),
+        "oi_change": m.get("OICHANGE"),
+        "settle_price": m.get("SETTLEPRICE"),
+        "last_change": m.get("LASTCHANGE"),
+        "last_change_pct": m.get("LASTCHANGEPRCNT"),
+        "update_time": m.get("UPDATETIME"),
+        "im_np": s.get("IMNP"),
+        "im_sp": s.get("IMP"),
+        "im_buy": s.get("IMBUY"),
+    }
+
+
+def option_orderbook(secid: str) -> dict:
+    """Стакан опционного инструмента (лучшие bid/offer из котировок).
+
+    Стакан (depth-of-market) для опционов недоступен через ISS REST API
+    (эндпоинт /orderbook возвращает HTML). Возвращаем лучшие bid/offer
+    из блока marketdata.
+
+    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
+    Возвращает: {secid, bid, offer, spread, bid_depth, offer_depth,
+    bid_depth_total, offer_depth_total}.
+    """
+    raw = raw_get(
+        f"engines/futures/markets/options/boards/ROPD/securities/{secid}",
+        {"iss.only": "marketdata"})
+    md = records(raw, "marketdata")
+    m = md[0] if md else {}
+    return {
+        "secid": secid,
+        "bid": m.get("BID"),
+        "offer": m.get("OFFER"),
+        "spread": m.get("SPREAD"),
+        "bid_depth": m.get("BIDDEPTH"),
+        "offer_depth": m.get("OFFERDEPTH"),
+        "bid_depth_total": m.get("BIDDEPTHT"),
+        "offer_depth_total": m.get("OFFERDEPTHT"),
+    }
+
+
+def option_history(secid: str, frm: str | None = None, till: str | None = None) -> list[dict]:
+    """История сделок опционного инструмента.
+
+    Вход: secid — код инструмента; frm/till — даты 'YYYY-MM-DD' (опционально).
+    Возвращает: [{tradedate, close, open, high, low, volume, value,
+    oi, oi_value, settle_price, waprice, num_trades, theor_price, change, qty}].
+    """
+    params: dict = {"limit": 500}
+    if frm:
+        params["from"] = frm
+    if till:
+        params["till"] = till
+    raw = raw_get(
+        f"history/engines/futures/markets/options/boards/ROPD/securities/{secid}",
+        params)
+    rows = records(raw, "history")
+    result = []
+    for r in rows:
+        result.append({
+            "tradedate": r.get("TRADEDATE"),
+            "secid": r.get("SECID"),
+            "close": r.get("CLOSE"),
+            "open": r.get("OPEN"),
+            "high": r.get("HIGH"),
+            "low": r.get("LOW"),
+            "volume": r.get("VOLUME"),
+            "value": r.get("VALUE"),
+            "oi": r.get("OPENPOSITION"),
+            "oi_value": r.get("OPENPOSITIONVALUE"),
+            "settle_price": r.get("SETTLEPRICE"),
+            "waprice": r.get("WAPRICE"),
+            "num_trades": r.get("NUMTRADES"),
+            "theor_price": r.get("THEOR_PRICE"),
+            "change": r.get("CHANGE"),
+            "qty": r.get("QTY"),
+        })
+    return result

@@ -177,12 +177,37 @@
 
 ### 🟢 `moex_options_board(asset)`
 Опционная доска (волатильность, страйки, OI) по базисному активу.
-- **Принимает:** `asset` — код базисного (`"GAZP"`, `"MOEX"`, `"SBRF"`, `"BR"` и т. д.).
+- **Принимает:** `asset` — код базисного (`"Si"`, `"GAZP"`, `"SBRF"`, `"GAZR"`, `"BR"` и т. д.).
+- Для фьючерсных базисных активов (`Si`, `GAZR`, `BR`, `CNY`, `MIX`...) автоматически резолвит код серии (`SiU6`, `GZU6`, `BRV6`...) через regular ISS, если statistics-эндпоинт вернул пустой ответ.
 - **Возвращает:** `{asset_info: {central_strike, underlying_settle, last_del_date},
   calls: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}],
   puts: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}]}`.
-- **Пример:** `moex_options_board("GAZP")` → 11 strike'ов, `asset_info.central_strike: 85.0`, calls[0].iv: 210.9%.
+- **Пример:** `moex_options_board("Si")` → 45 strike'ов, `asset_info.central_strike: 87000`, `asset_info.underlying: SiU6`, calls[0].iv: 22.5%.
 - **Использование:** оценка implied volatility (сравнить iv со скользящей vol спота); построение профилей risk reversal; выбор strike для хеджа.
+
+### 🟢 `moex_option_quote(secid)`
+Котировка конкретного опционного инструмента.
+- **Принимает:** `secid` — код инструмента (`"Si87000BI6A"`, `"GZ85CU6A"` и т. д.).
+- **Возвращает:** `{secid, shortname, secname, assetcode, option_type, strike, underlying_asset, underlying_settle, expiration_date, last_trade_date, min_step, step_price, prev_settle, prev_oi, last, bid, offer, spread, open, high, low, volume, value, num_trades, oi, oi_change, settle_price, last_change, last_change_pct, update_time, im_np, im_sp, im_buy}`.
+  - `option_type`: `C` — call, `P` — put.
+  - `im_np/im_sp/im_buy` — гарантийное обеспечение (ГО) по непокрытой/синтетической/покупке.
+- **Пример:** `moex_option_quote("Si87000BI6A")` → `{secid:"Si87000BI6A", strike:87000, option_type:"C", last:500, bid:485, offer:528, oi:8644, volume:2109, im_np:12791.23, im_buy:588.0, ...}`.
+- **Использование:** детальный анализ конкретного опциона — премия, спред bid/offer, ГО.
+
+### 🟢 `moex_option_orderbook(secid)`
+Лучшие bid/offer стакана опционного инструмента.
+- **Примечание:** полный стакан (depth-of-market) для опционов недоступен через ISS REST (эндпоинт `/orderbook` отдаёт HTML). Возвращаем лучшие bid/offer и спред из котировок.
+- **Принимает:** `secid` — код инструмента (`"Si87000BI6A"`, `"GZ85CU6A"` и т. д.).
+- **Возвращает:** `{secid, bid, offer, spread, bid_depth, offer_depth, bid_depth_total, offer_depth_total}`.
+- **Пример:** `moex_option_orderbook("Si87000BI6A")` → `{secid:"Si87000BI6A", bid:486, offer:530, spread:44, ...}`.
+- **Использование:** оценка ликвидности опционов; проверка спреда bid/offer.
+
+### 🟢 `moex_option_history(secid, frm=None, till=None)`
+История сделок опционного инструмента.
+- **Принимает:** `secid` — код инструмента; `frm/till` — даты `'YYYY-MM-DD'` (опционально).
+- **Возвращает:** `[{tradedate, secid, close, open, high, low, volume, value, oi, oi_value, settle_price, waprice, num_trades, theor_price, change, qty}]`.
+- **Пример:** `moex_option_history("GZ85CU6A")` → `[{tradedate:"2026-08-14", close:3.19, volume:1270, oi:6602, theor_price:2.97, ...}, ...]`.
+- **Использование:** анализ динамики премии и OI опционов.
 
 ### 🟢 `smartlab_dividends(limit=50)`
 Календарь ближайших дивидендов со smart-lab.ru.
