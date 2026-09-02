@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
-from . import bonds, cbr, moex, portfolio, rate, smartlab
+from . import bonds, cbr, moex, portfolio, rate, smartlab, vsezpif
 
 
 def _load_icons() -> list[Icon] | None:
@@ -277,6 +277,65 @@ def smartlab_dividend_history(ticker: str) -> list[dict]:
     payment_date, price} для этого эмитента.
     """
     return smartlab.get_dividend_history(ticker)
+
+
+# ─────────────────────────── ЗПИФ выплаты (vsezpif.ru) ───────────────────────────
+@mcp.tool()
+def zpif_payments(
+    fund_name: str | None = None,
+    isin: str | None = None,
+    limit: int = 50,
+) -> dict:
+    """Календарь выплат ЗПИФ недвижимости с vsezpif.ru.
+
+    Источник — единственный бесплатный агрегатор данных по 40+ фондам недвижимости.
+    Оценка следующей выплаты на основе календаря на 12 месяцев вперед.
+
+    Вход (опционально):
+      - fund_name — название фонда (или часть): 'Акцент', 'Парус', 'СФН', 'ВИМ';
+      - isin — международный идентификатор;
+      - limit — макс. количество записей (default 50).
+
+    Без параметров — все ближайшие выплаты на 12 месяцев.
+
+    Возврат:
+      - payments[]: {date, date_iso, fund_name, amount_per_unit};
+      - next_payment: {date_iso, fund_name, amount};
+      - funds_total: общее число фондов в календаре;
+      - cache_until: срок действия кэша (4 часа).
+    """
+    if fund_name or isin:
+        payments = vsezpif.get_payments_by_fund(
+            fund_name=fund_name,
+            isin=isin,
+            limit=limit,
+        )
+        next_pay = vsezpif.estimate_next_payment(
+            fund_name=fund_name,
+            isin=isin,
+        )
+    else:
+        payments = vsezpif.get_payment_calendar(limit=limit)
+        next_pay = payments[0] if payments else None
+
+    # Получить список всех фондов
+    all_funds = vsezpif.list_funds()
+
+    return {
+        "payments": payments,
+        "next_payment": next_pay,
+        "funds_total": len(all_funds),
+    }
+
+
+@mcp.tool()
+def zpif_funds_list() -> list[dict]:
+    """Список ЗПИФ недвижимости с vsezpif.ru.
+
+    Возвращает словари: {slug, fund_name, url}.
+    slug можно использовать в zpif_payments для поиска по slug.
+    """
+    return vsezpif.list_funds()
 
 
 # ─────────────────────────── ЦБ РФ (cbrapi) ───────────────────────────
