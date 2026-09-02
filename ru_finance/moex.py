@@ -32,7 +32,8 @@ def _engine_market(group: str | None) -> tuple[str, str]:
 
 
 def resolve(query: str, sec_type: str | None = None,
-            as_list: bool = False) -> dict | list[dict]:
+            as_list: bool = False,
+            traded_only: bool = False) -> dict | list[dict]:
     """Тикер/ISIN/название -> {secid, engine, market, board, type, ...}.
 
     sec_type — если задан (напр. "bond", "share", "fund"), фильтрует по типу
@@ -40,11 +41,14 @@ def resolve(query: str, sec_type: str | None = None,
     бумагу по скору.
 
     as_list — если True, возвращает все совпадения (до 200) вместо одного.
-    Удобно для «найди мне все облигации Сбербанка» или «все фонды Тинькофф».
+    traded_only — если True, отсечь бумаги с is_traded!=1 уже в запросе к ISS.
     """
     limit = 200 if as_list else 50
     q = query.strip()
-    raw = exec_template(T_SEARCH, params={"q": q, "limit": limit})
+    params: dict = {"q": q, "limit": limit}
+    if traded_only:
+        params["is_trading"] = 1
+    raw = exec_template(T_SEARCH, params=params)
     rows = records(raw, "securities")
     if not rows:
         raise ValueError(f"MOEX: не найдено бумаг по запросу {query!r}")

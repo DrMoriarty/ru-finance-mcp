@@ -73,17 +73,18 @@ def moex_resolve(query: str) -> dict:
 
 @mcp.tool()
 def moex_search(query: str, sec_type: str | None = None) -> list[dict]:
-    """Поиск бумаг на MOEX по тикеру/ISIN/названию — возвращает массив.
+    """Поиск торгуемых бумаг на MOEX по тикеру/ISIN/названию — возвращает массив.
 
     Вход: query — 'Сбербанк', 'Тинькофф', 'SBER', 'RU000A10C6F7'.
           sec_type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
     Возврат: [{secid, shortname, isin, type, group, is_traded, engine, market, board}, ...].
+    Показывает только активно торгуемые бумаги (is_traded=1).
     Примеры:
-      moex_search("Сбербанк")                → все бумаги Сбербанка
-      moex_search("Сбербанк", sec_type="bond") → только облигации
-      moex_search("Тинькофф", sec_type="fund") → только фонды
+      moex_search("Сбербанк")                → все торгуемые бумаги Сбербанка
+      moex_search("Сбербанк", sec_type="bond") → только торгуемые облигации
+      moex_search("Тинькофф", sec_type="fund") → только торгуемые фонды
     """
-    return moex.resolve(query, sec_type=sec_type, as_list=True)
+    return moex.resolve(query, sec_type=sec_type, as_list=True, traded_only=True)
 
 
 @mcp.tool()
