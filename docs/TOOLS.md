@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-38 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+40 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -214,13 +214,31 @@ MIACR — фактические средневзвешенные ставки �
 ## Облигационная математика
 
 ### 🧮 `bond_report(query)`
-Глубокий разбор облигации: метрики + сценарии по ставке + реальная доходность.
+Глубокий разбор облигации: метрики + сценарии + спред к кривой + конвексность.
 - **Принимает:** `query` — номер ОФЗ/ISIN.
 - **Возвращает:**
   - `bond` — как `moex_bond`;
-  - `scenarios` — `{macaulay_years, breakeven_yield_rise_pp, scenarios:[{delta_pp, total_return_pct}]}` (полный доход за год при сдвиге доходности на ±п.п. + точка безубытка);
+  - `years_to_maturity` — срок до погашения в годах;
+  - `convexity` — конвексность (поправка к duration при больших сдвигах);
+  - `accrued_interest` — `{accrued_rub, accrued_pct, days_accrued, coupon_period_days, last_coupon, next_coupon}`;
+  - `gry` — gross redemption yield (YTM с учётом НКД): `{gry_pct, dirty_price, accrued_rub}`;
+  - `spread_to_curve` — спред YTM к G-кривой: `{spread_pp, bond_ytm, curve_yield}`;
+  - `scenarios` — `{macaulay_years, breakeven_yield_rise_pp, scenarios:[{delta_pp, total_return_pct}]}` (полный доход за год при параллельном сдвиге ±п.п. + точка безубытка);
+  - `twist_scenarios` — сценарии сужения/расширения кривой: `[{name, delta_pp, total_return_pct, description}]` (steepener/flattener/twist_short/twist_long);
   - `real_return` — `[{inflation_pct, real_return_pct}]` (доходность к погашению за вычетом инфляции).
 - **Пример:** `bond_report("26253")` → при −2 п.п. годовой доход ≈ +27%, безубыток при росте доходности до ~+3.4 п.п.
+
+### 🧮 `bond_accrued_interest(query)`
+НКД облигации (накопленный купонный доход) — расчёт из календаря купонных дат.
+- **Принимает:** `query` — номер ОФЗ/ISIN.
+- **Возвращает:** `{accrued_rub, accrued_pct, days_accrued, coupon_period_days, last_coupon, next_coupon}`.
+
+### 🧮 `price_volatility(query, days=90, rf_annual=16.0)`
+Волатильность, Sharpe ratio, max drawdown по дневным свечам.
+- **Принимает:** `query` (тикер), `days` (90 по умолчанию), `rf_annual` (безрисковая ставка, % годовых).
+- **Возвращает:** `{annual_vol_pct, daily_vol_pct, sharpe, max_drawdown_pct, total_return_pct, high_price, low_price, trading_days, ...}`.
+- `sharpe` = (mean excess return / volatility) × sqrt(252); `max_drawdown_pct` — максимальная просадка от пика.
+- **Пример:** `price_volatility("SBER", 180)` → `{"annual_vol_pct":28.5,"sharpe":0.42,"max_drawdown_pct":12.3,...}`
 
 ---
 
@@ -255,12 +273,15 @@ refresh date: 2026-06-27        # опц.
 Ключ резолва: тикер/ISIN из скобок → номер ОФЗ → само название.
 
 ### 🧮 `portfolio_snapshot(assets)`
-Главная ручка — полный снимок портфеля.
-- **Возвращает:** `{as_of, key_rate, total_value, total_cost, pnl, pnl_pct, positions[], allocation[], rate_risk, income}`.
-  - `positions[]` — `{name, secid, account, bucket, qty, price, value, weight_pct, pnl_pct, change_pct, ytm, duration_years}`;
+Главная ручка — полный снимок портфеля. Включает дивидендную доходность акций, спред облигаций к кривой и реальную доходность.
+- **Возвращает:** `{as_of, key_rate, total_value, total_cost, pnl, pnl_pct, positions[], allocation[], rate_risk, income, income_risk}`.
+  - `positions[]` — `{name, secid, account, bucket, qty, price, value, weight_pct, pnl_pct, change_pct, ytm, duration_years, spread_to_curve_pp, div_yield_pct}`;
+    - `spread_to_curve_pp` — спред YTM облигации к G-кривой на сопоставимой дюрации (п.п.);
+    - `div_yield_pct` — дивидендная доходность акции (последний объявленный дивиденд / цена);
   - `allocation[]` — по корзинам (Длинные ОФЗ / Фонды акций / Акции / Корп. облигации / Денежный рынок);
   - `rate_risk` — `{portfolio_mod_duration_years, per_plus_1pp_pct/rub, per_minus_1pp_pct/rub}`;
-  - `income` — `{annual_coupons, annual_money_market, annual_total_est, running_yield_pct}`.
+  - `income` — `{annual_coupons, annual_money_market, annual_dividends, annual_total_est, running_yield_pct}`;
+  - `income_risk` — `{running_yield_pct, key_rate_for_real_est, real_yield_est_pct}` — реальная доходность портфеля (running_yield − ключевая ставка, приближение).
 
 ### 🧮 `portfolio_rate_whatif(delta_pp, assets)`
 Что станет с портфелем при сдвиге доходностей облигаций на `delta_pp` п.п.

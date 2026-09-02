@@ -407,19 +407,88 @@ def cbr_reserves(first_date: str | None = None, last_date: str | None = None,
 # ─────────────────────────── Облигационная математика ───────────────────────────
 @mcp.tool()
 def bond_report(query: str) -> dict:
-    """Глубокий разбор облигации: текущие метрики + сценарии по ставке + реальная доходность.
+    """Глубокий разбор облигации: метрики + сценарии + спред к кривой + конвексность.
 
-    Вход: query — номер ОФЗ/ISIN. Возврат: {bond, scenarios, real_return}.
-    scenarios — полный доход за год при сдвиге доходности на ±п.п. + точка безубытка.
-    real_return — доходность к погашению за вычетом разной инфляции.
+    Вход: query — номер ОФЗ/ISIN. Возврат:
+    {bond, years_to_maturity, convexity, accrued_interest, gry, spread_to_curve,
+     scenarios, twist_scenarios, real_return}.
+    scenarios — полный доход за год при параллельном сдвиге ±п.п. + точка безубытка.
+    twist_scenarios — сценарии сужения/расширения кривой.
+    spread_to_curve — спред YTM к G-кривой на сопоставимой дюрации.
+    gry — gross redemption yield (YTM с учётом НКД).
+    real_return — реальная доходность при разной инфляции.
     """
     b = moex.bond(query)
     rep: dict = {"bond": b}
-    if b.get("maturity") and b.get("coupon_pct") and b.get("ytm"):
+
+    # Срок до погашения
+    if b.get("maturity"):
+        rep["years_to_maturity"] = bonds.years_to_maturity(b["maturity"])
+
+    # НКД
+    if b.get("maturity") and b.get("coupon_pct") is not None:
+        ai = bonds.accrued_interest(date.today(), b["maturity"],
+                                     b["coupon_pct"], b.get("face_value") or 1000)
+        rep["accrued_interest"] = ai
+
+    # Конвексность и GRY
+    ytm = b.get("ytm")
+    mat = b.get("maturity")
+    c_pct = b.get("coupon_pct")
+    if mat and c_pct and ytm:
+        rep["convexity"] = bonds.convexity(
+            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000)
         rep["scenarios"] = bonds.rate_scenarios(
-            b["maturity"], b["coupon_pct"], b["ytm"], today=str(date.today()))
-        rep["real_return"] = bonds.real_return(b["ytm"])
+            mat, c_pct, ytm, today=str(date.today()))
+        rep["real_return"] = bonds.real_return(ytm)
+        if b.get("price_pct"):
+            rep["gry"] = bonds.gry(
+                date.today(), mat, c_pct, b["price_pct"],
+                b.get("face_value") or 1000)
+
+    # Twist-сценарии
+    dur = b.get("duration_years")
+    if mat and c_pct and ytm and dur:
+        rep["twist_scenarios"] = bonds.twist_scenarios(
+            mat, c_pct, ytm, dur, today=str(date.today()))
+
+    # Спред к G-кривой (только если есть duration и ytm)
+    if dur and ytm:
+        try:
+            cy = rate.curve_yield(dur)
+            rep["spread_to_curve"] = bonds.spread_to_curve(
+                ytm, dur, cy.get("yield", 0))
+        except Exception:  # noqa: BLE001
+            pass
+
     return rep
+
+
+@mcp.tool()
+def bond_accrued_interest(query: str) -> dict:
+    """Накопленный купонный доход (НКД) облигации.
+
+    Вход: query — номер ОФЗ/ISIN. Возврат: {accrued_rub, accrued_pct,
+    days_accrued, coupon_period_days, last_coupon, next_coupon}.
+    НКД считается из календаря купонных дат (freq=2, полугодовые).
+    """
+    b = moex.bond(query)
+    if not b.get("maturity") or b.get("coupon_pct") is None:
+        return {"error": "недостаточно данных по облигации"}
+    return bonds.accrued_interest(
+        date.today(), b["maturity"], b["coupon_pct"], b.get("face_value") or 1000)
+
+
+@mcp.tool()
+def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dict:
+    """Волатильность, Sharpe ratio, max drawdown по дневным свечам.
+
+    Вход: query (тикер), days (90 по умолчанию), rf_annual (безрисковая ставка, %
+    годовых). Возврат: {annual_vol_pct, daily_vol_pct, sharpe, max_drawdown_pct,
+    total_return_pct, high_price, low_price, trading_days, ...}.
+    sharpe = (mean_excess_return / volatility) * sqrt(252).
+    """
+    return moex.price_volatility(query, days, rf_annual)
 
 
 # ─────────────────────────── Ожидания по ставке (G-кривая ОФЗ) ───────────────────────────
@@ -448,12 +517,14 @@ def curve_yield(years: float) -> dict:
 # ─────────────────────────── Портфель (доменные отчёты) ───────────────────────────
 @mcp.tool()
 def portfolio_snapshot(assets: str) -> dict:
-    """Снимок портфеля: стоимость, P&L, позиции, распределение, риск по ставке
-    (дюрация портфеля), денежный поток (купоны/running yield). Главная ручка.
+    """Снимок портфеля: стоимость, P&L, позиции, распределение, риск по ставке,
+    денежный поток, дивидендная доходность, реальная доходность.
 
     Вход: assets — портфель в markdown (формат см. в описании portfolio-ручек/TOOLS.md):
     строки '- Название (ТИКЕР/ISIN): N шт. (цена_покупки ...)', '%' = облигация.
     Сервер generic: конкретные бумаги приходят ТОЛЬКО в этом параметре.
+    Позиции включают spread_to_curve_pp (спред к G-кривой) и div_yield_pct.
+    income_risk — реальная доходность портфеля (running_yield − ключевая ставка).
     """
     return portfolio.snapshot(assets)
 

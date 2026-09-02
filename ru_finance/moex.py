@@ -376,6 +376,87 @@ def aggregates(query: str, date: str) -> dict:
     }
 
 
+def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dict:
+    """Волатильность, Sharpe, MaxDD по дневным свечам за N дней.
+
+    rf_annual — безрисковая ставка (% годовых, по умолчанию текущая ключевая ≈16%).
+    Возвращает: {days, annual_vol_pct, daily_vol_pct, sharpe, max_drawdown_pct,
+    total_return_pct, high_price, low_price, high_date, low_date, close_start, close_end}.
+    """
+    from datetime import date, timedelta
+    till = date.today()
+    frm = till - timedelta(days=days + 10)  # запас на выходные/праздники
+    r = resolve(query)
+    raw = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows = records(raw, "candles")
+    if len(rows) < 2:
+        return {"error": "недостаточно данных", "rows_found": len(rows)}
+    closes = [row["close"] for row in rows if row.get("close")]
+    if len(closes) < 2:
+        return {"error": "недостаточно close-цен", "rows_found": len(closes)}
+
+    # дневные лог-доходности
+    import math
+    rets = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))
+            if closes[i - 1] and closes[i]]
+    if not rets:
+        return {"error": "нет доходностей"}
+
+    n = len(rets)
+    mean_r = sum(rets) / n
+    var = sum((r - mean_r) ** 2 for r in rets) / (n - 1) if n > 1 else 0
+    daily_vol = var ** 0.5
+    ann_vol = daily_vol * (252 ** 0.5)
+
+    # Sharpe
+    rf_daily = math.log(1 + rf_annual / 100) / 252
+    excess_mean = mean_r - rf_daily
+    sharpe = round(excess_mean / daily_vol * (252 ** 0.5), 2) if daily_vol else 0
+
+    # Max drawdown
+    peak = closes[0]
+    max_dd = 0.0
+    high_price = closes[0]
+    low_price = closes[0]
+    high_idx = low_idx = 0
+    for i, c in enumerate(closes):
+        if c > peak:
+            peak = c
+        dd = (peak - c) / peak
+        if dd > max_dd:
+            max_dd = dd
+        if c > high_price:
+            high_price = c
+            high_idx = i
+        if c < low_price:
+            low_price = c
+            low_idx = i
+
+    total_ret = (closes[-1] / closes[0] - 1) * 100
+
+    return {
+        "days": days,
+        "period_start": rows[0].get("begin", ""),
+        "period_end": rows[-1].get("begin", ""),
+        "close_start": closes[0],
+        "close_end": closes[-1],
+        "total_return_pct": round(total_ret, 2),
+        "daily_vol_pct": round(daily_vol * 100, 2),
+        "annual_vol_pct": round(ann_vol * 100, 2),
+        "sharpe": sharpe,
+        "max_drawdown_pct": round(max_dd * 100, 2),
+        "high_price": high_price,
+        "high_date": rows[high_idx].get("begin", ""),
+        "low_price": low_price,
+        "low_date": rows[low_idx].get("begin", ""),
+        "rf_used_pct": rf_annual,
+        "trading_days": len(closes),
+    }
+
+
 def indicative_rates(frm: str | None = None,
                      till: str | None = None) -> list[dict]:
     """Индикативные курсы валют срочного рынка.

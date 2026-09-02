@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 
-from . import bonds, cbr, moex, smartlab
+from . import bonds, cbr, moex, rate, smartlab
 
 _LINE = re.compile(r"^-\s*(?P<name>.+?)\s*:\s*(?P<qty>[\d ]+)\s*шт\.?\s*\((?P<prices>[^)]*)\)")
 _TICKER = re.compile(r"\(([A-Z0-9]{1,12})\)\s*$")
@@ -117,6 +117,13 @@ def _enrich(pos: dict) -> dict:
         })
         p["value"] = pos["qty"] * face * price_pct / 100 if price_pct else None
         p["cost"] = pos["qty"] * face * pos["buy_price"] / 100 if pos["buy_price"] else None
+        # Спред к G-кривой
+        if b.get("ytm") and b.get("duration_years"):
+            try:
+                cy = rate.curve_yield(b["duration_years"])
+                p["spread_to_curve_pp"] = round(b["ytm"] - cy.get("yield", 0), 2)
+            except Exception:  # noqa: BLE001
+                pass
     else:
         q = moex.quote(pos["search_key"])
         price = q.get("price")
@@ -127,6 +134,19 @@ def _enrich(pos: dict) -> dict:
         p["type"] = moex.resolve(pos["search_key"]).get("type")
         p["value"] = pos["qty"] * price if price else None
         p["cost"] = pos["qty"] * pos["buy_price"] if pos["buy_price"] else None
+        # Дивидендная доходность
+        ticker = pos["search_key"]
+        if price:
+            try:
+                divs = smartlab.get_dividend_history(ticker)
+                if divs:
+                    last_div = divs[-1].get("dividend_rub")
+                    if last_div:
+                        p["dividend_rub"] = last_div
+                        p["div_yield_pct"] = round(last_div / price * 100, 2)
+                        p["annual_dividend_per_position"] = round(pos["qty"] * last_div, 2)
+            except Exception:  # noqa: BLE001
+                pass
     if p.get("value") and p.get("cost"):
         p["pnl"] = round(p["value"] - p["cost"], 2)
         p["pnl_pct"] = round(p["pnl"] / p["cost"] * 100, 2)
@@ -166,7 +186,14 @@ def snapshot(assets_text: str) -> dict:
                         for p in positions if p["is_bond"])
     mm_income = sum((p.get("value") or 0) * key / 100
                     for p in positions if p["bucket"] == "money_market")
-    income = coupon_income + mm_income
+    # Дивидендный доход по акциям
+    div_income = sum((p.get("annual_dividend_per_position") or 0)
+                     for p in positions if not p["is_bond"])
+    income = coupon_income + mm_income + div_income
+
+    running_yield_pct = round(income / total * 100, 1) if total else None
+    infl = round(key, 1)  # ключевая ставка как оценка инфляции (грубое приближение)
+    real_yield_pct = round(running_yield_pct - infl, 1) if running_yield_pct is not None else None
 
     return {
         "as_of": _refresh_date(assets_text),
@@ -183,15 +210,26 @@ def snapshot(assets_text: str) -> dict:
             "weight_pct": p.get("weight_pct"),
             "pnl_pct": p.get("pnl_pct"), "change_pct": p.get("change_pct"),
             "ytm": p.get("ytm"), "duration_years": p.get("duration_years"),
+            "spread_to_curve_pp": p.get("spread_to_curve_pp"),
+            "div_yield_pct": p.get("div_yield_pct"),
         } for p in positions],
         "allocation": allocation,
         "rate_risk": rate_risk,
         "income": {
             "annual_coupons": round(coupon_income, 0),
             "annual_money_market": round(mm_income, 0),
+            "annual_dividends": round(div_income, 0),
             "annual_total_est": round(income, 0),
-            "running_yield_pct": round(income / total * 100, 1) if total else None,
-            "note": "оценка; без дивидендов акций (см. income_calendar) и без налогов",
+            "running_yield_pct": running_yield_pct,
+            "note": ("оценка; купоны + дивиденды (последний объявленный) + "
+                     "доходность денежного рынка; без налогов"),
+        },
+        "income_risk": {
+            "running_yield_pct": running_yield_pct,
+            "key_rate_for_real_est": infl,
+            "real_yield_est_pct": real_yield_pct,
+            "note": ("реальная доходность = running_yield − ключевая ставка "
+                     "(приближение, не точная инфляция)"),
         },
     }
 
