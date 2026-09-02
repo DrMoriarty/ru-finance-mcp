@@ -59,12 +59,13 @@
   MCP_TRANSPORT=streamable-http MCP_PORT=8000 python -m ru_finance.mcp_server  # http://127.0.0.1:8000/mcp
   ```
   `start.sh` — это уже remote-режим на `0.0.0.0:8000`.
-- **Модели в `ru_finance/`:** `session.py` (клиент moex + ретраи), `moex.py`
-  (резолв/котировки/облигации/история), `cbr.py` (ставка, RUONIA, MIACR, валюта,
-  металлы, ЗВР), `bonds.py` (дюрация и сценарии по ставке), `portfolio.py`
+- **Модели в `ru_finance/`:** `session.py` (клиент aioboy/moex + ретраи на сырой requests/niquests),
+  `moex.py` (резолв/котировки/облигации/история), `cbr.py` (ставка, RUONIA, MIACR, валюта,
+  металлы, ЗВР), `bonds.py` (дюрация и сценарии по ставке), `rate.py`
+  (G-кривая ОФЗ, ожидания по ставке, NSS-модель КБД), `portfolio.py`
   (парсинг `assets` + отчёты), `smartlab.py` (календарь + история дивидендов со
-  smart-lab.ru; ISS-эндпоинт дивidendов пуст). Наружу всё пробрасывается как
-  инструменты в `mcp_server.py` (24 `@mcp.tool()`).
+  smart-lab.ru; ISS-эндпоинт дивидендов пуст). Наружу всё пробрасывается как
+  инструменты в `mcp_server.py` (25 `@mcp.tool()`).
 - **Личные данные — вне репо.** `assets.md`/`context.md` (портфель и контекст
   пользователя) находятся в родительской папке и в `.gitignore` — не создавай их
   здесь и не храни в коде.

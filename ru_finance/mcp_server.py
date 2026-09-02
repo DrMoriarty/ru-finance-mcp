@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -41,6 +41,22 @@ mcp = FastMCP(
     # уровне прокси (TLS + секретный путь / IP-allowlist), поэтому отключаем её.
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
+
+
+# ─────────────────────────── Утилиты ───────────────────────────
+@mcp.tool()
+def current_datetime() -> dict:
+    """Текущая дата и время сервера (UTC+0, ISO 8601).
+    
+    Возвращает: {datetime, date, time, timestamp}.
+    """
+    now = datetime.now()
+    return {
+        "datetime": now.isoformat(),
+        "date": now.date().isoformat(),
+        "time": now.time().isoformat(),
+        "timestamp": now.timestamp(),
+    }
 
 
 # ─────────────────────────── MOEX (Московская биржа) ───────────────────────────
