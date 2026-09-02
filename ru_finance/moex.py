@@ -242,31 +242,68 @@ def query(template_id: int, vars: dict | None = None,
 def company_info(query: str) -> dict:
     """Справка об организации по ИНН/ОГРН/названию.
 
-    Ищет в /cci/info/companies (бесплатно). Возвращает {companies: [...]}.
-    query может быть ИНН, ОГРН или фрагментом названия.
+    Ищет через /iss/securities.json (поисковый эндпоинт ISS).
+    Возвращает {companies: [...]} с дедупликацией по emitent_id.
+
+    query может быть ИНН, ОГРН, тикером или фрагментом названия.
     """
-    raw = raw_get("cci/info/companies", {"limit": 50})
-    rows = records(raw, "cci_companies")
+    raw = raw_get("securities", {"q": query, "limit": 200})
+    rows = records(raw, "securities")
     if not rows:
         return {"companies": []}
+
     q = query.strip().upper()
-    matched = [r for r in rows
-               if q in str(r.get("inn", "")).upper()
-               or q in str(r.get("ogrn", "")).upper()
-               or q in str(r.get("name_short_ru", "")).upper()
-               or q in str(r.get("name_full_ru", "")).upper()
-               or q in str(r.get("basis_company_id", "")).upper()]
-    return {"companies": matched[:20]}
+    seen: dict[int, dict] = {}
+    for r in rows:
+        eid = r.get("emitent_id")
+        if eid is None:
+            continue
+        if eid in seen:
+            continue
+        # запрос ISS и так отфильтровал, но на всякий случай проверяем
+        name = str(r.get("name", "") or "").upper()
+        shortname = str(r.get("shortname", "") or "").upper()
+        inn = str(r.get("emitent_inn", "") or "").upper()
+        title = str(r.get("emitent_title", "") or "").upper()
+        if not (q in name or q in shortname or q in inn or q in title
+                or q in str(eid)):
+            continue
+        seen[eid] = {
+            "basis_company_id": eid,
+            "inn": r.get("emitent_inn"),
+            "name_short_ru": r.get("shortname"),
+            "name_full_ru": r.get("emitent_title"),
+            "okpo": r.get("emitent_okpo"),
+            "secid": r.get("secid"),
+        }
+    return {"companies": list(seen.values())[:20]}
 
 
 def company_info_by_id(company_id: int) -> dict:
     """Справка об организации по внутреннему ID (basis_company_id).
 
-    Возвращает: {inn, ogrn, name_short_ru, name_full_ru, lei_code, ...}.
+    Пытается сначала через /cci/info/companies/{id}, затем — через поиск
+    securities по emitent_id. Возвращает {} если ничего не найдено.
     """
+    # Попробуем CCI (поля могут быть пусты — ISS бывает)
     raw = raw_get(f"cci/info/companies/{company_id}")
     rows = records(raw, "cci_company")
-    return rows[0] if rows else {}
+    if rows and rows[0].get("name_short_ru"):
+        return rows[0]
+
+    # Фоллбэк: securities search + фильтр по emitent_id
+    raw = raw_get("securities", {"limit": 200})
+    for r in records(raw, "securities"):
+        if r.get("emitent_id") == company_id:
+            return {
+                "basis_company_id": company_id,
+                "inn": r.get("emitent_inn"),
+                "name_short_ru": r.get("shortname"),
+                "name_full_ru": r.get("emitent_title"),
+                "okpo": r.get("emitent_okpo"),
+                "secid": r.get("secid"),
+            }
+    return {}
 
 
 def ir_calendar(limit: int = 50) -> list[dict]:

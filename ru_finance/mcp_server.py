@@ -149,8 +149,9 @@ def moex_query(template_id: int, vars: dict | None = None,
 def moex_company_info(query: str) -> dict:
     """Справка об организации по ИНН/ОГРН/названию.
 
-    Вход: query — ИНН, ОГРН или фрагмент названия.
-    Возврат: {companies: [{basis_company_id, inn, ogrn, name_short_ru, name_full_ru, ...}]}.
+    Вход: query — ИНН, ОГРН, тикер или фрагмент названия.
+    Возврат: {companies: [{basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid}]}.
+    Дубликаты по emitent_id убираются; максимальный результат — 20 компаний.
     """
     return moex.company_info(query)
 
@@ -160,7 +161,7 @@ def moex_company_info_by_id(company_id: int) -> dict:
     """Справка об организации по внутреннему ID MOEX (basis_company_id).
 
     Вход: company_id — числовой ID (узнаётся из moex_company_info).
-    Возврат: {inn, ogrn, name_short_ru, name_full_ru, lei_code, ...}.
+    Возврат: {basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid, ...} или {}.
     """
     return moex.company_info_by_id(company_id)
 

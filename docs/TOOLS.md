@@ -67,15 +67,15 @@
 - **Пример:** `moex_query(322, {"engine":"stock"}, {})`
 
 ### 🟢 `moex_company_info(query)`
-Справка об организации по ИНН/ОГРН/названию (данные НРД/CCI).
-- **Принимает:** `query` — ИНН, ОГРН или фрагмент названия.
-- **Возвращает:** `{companies: [{basis_company_id, inn, ogrn, name_short_ru, name_full_ru, lei_code, ...}]}`.
+Справка об организации по ИНН/ОГРН/тикеру/названию (ISS securities search, дедупликация по emitent_id).
+- **Принимает:** `query` — ИНН, ОГРН, тикер или фрагмент названия.
+- **Возвращает:** `{companies: [{basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid}]}` (до 20 шт).
 - **Пример:** `moex_company_info("Сбербанк")`
 
 ### 🟢 `moex_company_info_by_id(company_id)`
 Справка об организации по внутреннему ID MOEX (basis_company_id).
 - **Принимает:** `company_id` — числовой ID (узнаётся из `moex_company_info`).
-- **Возвращает:** `{inn, ogrn, name_short_ru, name_full_ru, lei_code, egrul_date, ...}`.
+- **Возвращает:** `{basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid, ...}` или `{}`.
 
 ### 🟢 `moex_ir_calendar(limit=50)`
 Календарь IR-мероприятий (даты отчётов публичных компаний).
