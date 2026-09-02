@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-40 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+46 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -138,6 +138,51 @@
 - **Возвращает:** `[{tradedate, tradetime, secid, rate, clearing}]`.
 - `secid` — валютная пара (`"CNY/RUB"`, `"USD/RUB"`, ...).
 - **Пример:** `moex_indicative_rates()` → текущие курсы
+
+### 🟢 `moex_futures_list(asset_code=None)`
+Каталог фьючерсных контрактов FORTS с рыночными данными и спецификацией.
+- **Принимает:** `asset_code` — код базисного актива (`"Si"`, `"RTS"`, `"BR"`, `"GAZR"` и т. д.). Без параметра — все торгуемые контракты.
+- **Возвращает:** `[{secid, name, shortname, asset_code, expiry_date, lot_volume, min_step, step_price, initial_margin, prev_settle_price, last_settle_price, open_interest, prev_open_interest, oichange, prev_price, bid, offer, spread, last, high, low, volume_today, value_today, num_trades, high_limit, low_limit, buy_sell_fee, scalper_fee}]`.
+- **Пример:** `moex_futures_list("Si")` → `[{secid:"SiU6", name:"Si-9.26", last_settle_price:87119, open_interest:8139998, initial_margin:13260.16, ...}, ...]` — 6 контрактов Si.
+- **Использование:** сравнить обеспечения, спреды bid/ask, объёмы по разным экспирациям; найти самый ликвидный контракт.
+
+### 🟢 `moex_futures_open_interest(asset)`
+Открытый интерес по базисному активу: разбивка на юрлица / физлица.
+- **Принимает:** `asset` — код базисного (`"Si"`, `"RTS"`, `"BR"`, `"SBRF"` и т. д.).
+- **Возвращает:** `{asset, tradedate, juridical: {persons_long, persons_short, oi_long, oi_short, oi_change_long, oi_change_short}, physical: {...}, total_oi_long, total_oi_short}`.
+- **Пример:** `moex_futures_open_interest("Si")` → `juridical.oi_long: 4451580, physical.oi_long: 1340390` — юрлица держат 3/4 длинных позиций.
+- **Использование:** дивергенция «умных денег» vs розницы. Резкий рост `oi_change_long` юрлиц при падении цены → возможен разворот.
+
+### 🟢 `moex_futures_series(asset=None)`
+Календарь экспираций фьючерсов.
+- **Принимает:** `asset` — код базисного (`"Si"`, `"RTS"`...). Без параметра — все серии.
+- **Возвращает:** `[{secid, name, start_date, expiration_date, asset_code, underlying_asset, is_traded, is_expired, days_to_expiry}]`.
+- `days_to_expiry` — дней до экспирации (`< 0` — уже истёк).
+- **Пример:** `moex_futures_series("Si")` → `[{secid:"SiU7", expiration_date:"2027-09-16", days_to_expiry:379, is_traded:1}, ...]` — 6 контрактов.
+- **Использование:** выбор контракта для ролла (сравнить `days_to_expiry`); построение кривой фьючерсных цен.
+
+### 🟢 `moex_futures_promo()`
+Агрегированная статистика срочного рынка (FORTS).
+- **Принимает:** ничего.
+- **Возвращает:** `{fee_forts, fee_options, fee_all, updated_at}` — совокупные комиссионные сборы рынка.
+- **Использование:** грубый proxy активности рынка в динамике (выше сборы → больше торгов).
+
+### 🟢 `moex_options_assets()`
+Базисные активы опционов FORTS с рыночными данными.
+- **Принимает:** ничего.
+- **Возвращает:** `[{tradedate, asset, shortname, asset_type, asset_last_price, asset_last_to_prev_price, asset_high_price, asset_low_price, valtoday, voltoday, numtrades, openposition, oichange, option_secid}]`.
+- `asset_type`: `S` — акция, `F` — фьючерс, `M` — фьючерс (мини), `C` — валюта.
+- **Пример:** `moex_options_assets()` → `[{asset:"GAZP", asset_last_price:86.76, openposition:36528744, vol_today:148375, ...}, ...]` — 90 активов.
+- **Использование:** отобрать активы с высоким опционным OI; найти Calling/лесенку strikes по конкретному активу.
+
+### 🟢 `moex_options_board(asset)`
+Опционная доска (волатильность, страйки, OI) по базисному активу.
+- **Принимает:** `asset` — код базисного (`"GAZP"`, `"MOEX"`, `"SBRF"`, `"BR"` и т. д.).
+- **Возвращает:** `{asset_info: {central_strike, underlying_settle, last_del_date},
+  calls: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}],
+  puts: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}]}`.
+- **Пример:** `moex_options_board("GAZP")` → 11 strike'ов, `asset_info.central_strike: 85.0`, calls[0].iv: 210.9%.
+- **Использование:** оценка implied volatility (сравнить iv со скользящей vol спота); построение профилей risk reversal; выбор strike для хеджа.
 
 ### 🟢 `smartlab_dividends(limit=50)`
 Календарь ближайших дивидендов со smart-lab.ru.

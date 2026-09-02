@@ -267,6 +267,78 @@ def moex_indicative_rates(frm: str | None = None,
     return moex.indicative_rates(frm, till)
 
 
+# ───────────────────── Срочный рынок (фьючерсы / опционы) ─────────────────────
+@mcp.tool()
+def moex_futures_list(asset_code: str | None = None) -> list[dict]:
+    """Каталог фьючерсных контрактов FORTS с рыночными данными и спецификацией.
+
+    Вход: asset_code — код базисного актива (напр. 'Si', 'RTS', 'BR', 'GAZR').
+          Без параметра — все торгуемые контракты.
+    Возврат: [{secid, name, asset_code, expiry_date, lot_volume, min_step,
+    step_price, initial_margin, last_settle_price, open_interest, oichange,
+    bid, offer, last, high, low, volume_today, value_today, ...}].
+    """
+    return moex.futures_list(asset_code)
+
+
+@mcp.tool()
+def moex_futures_open_interest(asset: str) -> dict:
+    """Открытый интерес по базисному активу: разбивка на юрлица / физлица.
+
+    Вход: asset — код базисного актива ('Si', 'RTS', 'BR', 'SBRF'...).
+    Возврат: {asset, tradedate, juridical: {oi_long, oi_short, oi_change_...},
+    physical: {...}, total_oi_long, total_oi_short}.
+    Показывает, кто (непрофессионалы vs профессионалы) наращивает/сокращает позиции.
+    """
+    return moex.futures_open_interest(asset)
+
+
+@mcp.tool()
+def moex_futures_series(asset: str | None = None) -> list[dict]:
+    """Календарь экспираций фьючерсов — контракты с датами погашения.
+
+    Вход: asset — код базисного ('Si', 'RTS'...), опционально.
+    Без параметра — все серии (до 500).
+    Возврат: [{secid, name, start_date, expiration_date, asset_code,
+    underlying_asset, is_traded, is_expired, days_to_expiry}].
+    days_to_expiry — дней до экспирации (< 0 — уже истёк).
+    """
+    return moex.futures_series(asset)
+
+
+@mcp.tool()
+def moex_futures_promo() -> dict:
+    """Агрегированная статистика срочного рынка (FORTS): объём комиссий.
+
+    Возврат: {fee_forts, fee_options, fee_all, updated_at}.
+    """
+    return moex.futures_promo()
+
+
+@mcp.tool()
+def moex_options_assets() -> list[dict]:
+    """Базисные активы опционов FORTS с рыночными данными.
+
+    Возврат: [{tradedate, asset, asset_name, asset_type, asset_last_price,
+    asset_last_to_prev, asset_high, asset_low, val_today, vol_today, num_trades,
+    open_position, oichange, option_secid}].
+    """
+    return moex.options_assets()
+
+
+@mcp.tool()
+def moex_options_board(asset: str) -> dict:
+    """Опционная доска (волатильность, страйки, OI) по базисному активу.
+
+    Вход: asset — код базисного ('Si', 'RTS', 'SBRF', 'GAZR'...).
+    Возврат: {asset_info: {central_strike, underlying_settle, last_del_date},
+    calls: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}],
+    puts: [同上]}.
+    Для оценки волатильности опционов и принятия решений по хеджам.
+    """
+    return moex.options_board(asset)
+
+
 # ─────────────────────────── Дивиденды (smart-lab.ru) ───────────────────────────
 @mcp.tool()
 def smartlab_dividends(limit: int = 50) -> list[dict]:

@@ -473,3 +473,181 @@ def indicative_rates(frm: str | None = None,
     raw = raw_get("statistics/engines/futures/markets/indicativerates/securities",
                   params)
     return records(raw, "securities")
+
+
+# ─────────────────── Срочный рынок (фьючерсы / опционы) ───────────────────
+
+def futures_list(asset_code: str | None = None) -> list[dict]:
+    """Каталог фьючерсных контрактов с рыночными данными и спецификацией.
+
+    Вход: asset_code — код базисного актива (напр. 'Si', 'RTS', 'BR', 'GAZR').
+          Без параметра — все торгуемые контракты.
+    Возвращает: [{secid, name, asset_code, expiry_date, lot_volume, min_step,
+    step_price, initial_margin, prev_settle_price, last_settle_price,
+    open_interest, prev_price, oichange, bid, offer, last, high, low,
+    volume_today, value_today, num_trades}].
+    """
+    raw_securities = raw_get(
+        "engines/futures/markets/forts/boards/RFUD/securities",
+        {"iss.only": "securities,marketdata"})
+    secs = records(raw_securities, "securities")
+    mds = records(raw_securities, "marketdata")
+    md_by_id = {r["SECID"]: r for r in mds}
+
+    rows = []
+    for s in secs:
+        if asset_code and s.get("ASSETCODE") != asset_code:
+            continue
+        md = md_by_id.get(s["SECID"], {})
+        rows.append({
+            "secid": s.get("SECID"),
+            "name": s.get("SECNAME"),
+            "shortname": s.get("SHORTNAME"),
+            "asset_code": s.get("ASSETCODE"),
+            "expiry_date": s.get("LASTTRADEDATE"),
+            "lot_volume": s.get("LOTVOLUME"),
+            "min_step": s.get("MINSTEP"),
+            "step_price": s.get("STEPPRICE"),
+            "initial_margin": s.get("INITIALMARGIN"),
+            "prev_settle_price": s.get("PREVSETTLEPRICE"),
+            "last_settle_price": s.get("LASTSETTLEPRICE"),
+            "open_interest": md.get("OPENPOSITION"),
+            "prev_open_interest": s.get("PREVOPENPOSITION"),
+            "oichange": md.get("OICHANGE"),
+            "prev_price": s.get("PREVPRICE"),
+            "bid": md.get("BID"),
+            "offer": md.get("OFFER"),
+            "spread": md.get("SPREAD"),
+            "last": md.get("LAST"),
+            "high": md.get("HIGH"),
+            "low": md.get("LOW"),
+            "volume_today": md.get("VOLTODAY"),
+            "value_today": md.get("VALTODAY"),
+            "num_trades": md.get("NUMTRADES"),
+            "high_limit": s.get("HIGHLIMIT"),
+            "low_limit": s.get("LOWLIMIT"),
+            "buy_sell_fee": s.get("BUYSELLFEE"),
+            "scalper_fee": s.get("SCALPERFEE"),
+        })
+    return rows
+
+
+def futures_open_interest(asset: str) -> dict:
+    """Открытый интерес по базисному активу (юридические / физические лица).
+
+    Вход: asset — код базисного актива ('Si', 'RTS', 'BR', 'SBRF'...).
+    Возвращает: {asset, tradedate, juridical: {persons_long, persons_short,
+    oi_long, oi_short, oi_change_long, oi_change_short}, physical: {...},
+    total_oi_long, total_oi_short}.
+    """
+    raw = raw_get(f"statistics/engines/futures/markets/forts/openpositions/{asset}")
+    rows = records(raw, "open_positions")
+    if not rows:
+        return {"asset": asset, "error": "нет данных"}
+    jurid = next((r for r in rows if r.get("is_fiz") == 0), {})
+    fiz = next((r for r in rows if r.get("is_fiz") == 1), {})
+    oi_long = (jurid.get("open_position_long") or 0) + (fiz.get("open_position_long") or 0)
+    oi_short = (jurid.get("open_position_short") or 0) + (fiz.get("open_position_short") or 0)
+    return {
+        "asset": rows[0].get("asset"),
+        "tradedate": rows[0].get("tradedate"),
+        "juridical": {
+            "persons_long": jurid.get("persons_long"),
+            "persons_short": jurid.get("persons_short"),
+            "oi_long": jurid.get("open_position_long"),
+            "oi_short": jurid.get("open_position_short"),
+            "oi_change_long": jurid.get("oichange_long"),
+            "oi_change_short": jurid.get("oichange_short"),
+        },
+        "physical": {
+            "persons_long": fiz.get("persons_long"),
+            "persons_short": fiz.get("persons_short"),
+            "oi_long": fiz.get("open_position_long"),
+            "oi_short": fiz.get("open_position_short"),
+            "oi_change_long": fiz.get("oichange_long"),
+            "oi_change_short": fiz.get("oichange_short"),
+        },
+        "total_oi_long": oi_long,
+        "total_oi_short": oi_short,
+    }
+
+
+def futures_series(asset: str | None = None) -> list[dict]:
+    """Календарь экспираций фьючерсов.
+
+    Вход: asset — код базисного актива ('Si', 'RTS', ...), опционально.
+    Без параметра — все серии.
+    Возвращает: [{secid, name, start_date, expiration_date, asset_code,
+    underlying_asset, is_traded}].
+    """
+    raw = raw_get("statistics/engines/futures/markets/forts/series",
+                  {"limit": 500})
+    rows = records(raw, "series")
+    if asset:
+        rows = [r for r in rows if r.get("asset_code") == asset]
+    today = str(__import__("datetime").date.today())
+    for r in rows:
+        r["is_expired"] = (r.get("expiration_date") or "") < today
+        r["days_to_expiry"] = None
+        if r.get("expiration_date"):
+            try:
+                from datetime import date as _d
+                r["days_to_expiry"] = (
+                    _d.fromisoformat(r["expiration_date"]) - _d.fromisoformat(today)
+                ).days
+            except Exception:
+                pass
+    return rows
+
+
+def futures_promo() -> dict:
+    """Агрегированная статистика срочного рынка (FORTS).
+
+    Возвращает: {fee_forts, fee_options, fee_all, updated_at}.
+    """
+    raw = raw_get("statistics/engines/futures/promo")
+    rows = records(raw, "futures_promo")
+    return rows[0] if rows else {}
+
+
+def options_assets() -> list[dict]:
+    """Базисные активы опционов FORTS с рыночными данными.
+
+    Возвращает: [{tradedate, asset, asset_name, asset_type, asset_last_price,
+    asset_last_to_prev, asset_high, asset_low, val_today, vol_today, num_trades,
+    open_position, oichange, option_secid, margin_style, option_on_spot}].
+    """
+    raw = raw_get("statistics/engines/futures/markets/options/assets",
+                  {"limit": 500})
+    return records(raw, "asset_volumes")
+
+
+def options_board(asset: str) -> dict:
+    """Опционная доска по базисному активу (call + put + параметры).
+
+    Вход: asset — код базисного ('Si', 'RTS', 'SBRF', 'GAZR'...).
+    Возвращает: {asset_info: {central_strike, underlying_settle, last_del_date},
+    calls: [{secid, strike, iv, last, bid, offer, oi, volume}],
+    puts: [同上]}.
+    """
+    raw = raw_get(
+        f"statistics/engines/futures/markets/options/assets/{asset}/optionboard",
+        {"limit": 200})
+    call_rows = records(raw, "call")
+    put_rows = records(raw, "put")
+    asset_rows = records(raw, "asset")
+    return {
+        "asset_info": asset_rows[0] if asset_rows else {},
+        "calls": [{"secid": r.get("SECID"), "strike": r.get("STRIKE"),
+                    "iv": r.get("VOLAT"), "last": r.get("LAST"),
+                    "theor_price": r.get("THEORPRICE"),
+                    "bid": r.get("BID"), "offer": r.get("OFFER"),
+                    "oi": r.get("OPENPOSITION"), "volume": r.get("VOLTODAY")}
+                   for r in call_rows],
+        "puts": [{"secid": r.get("SECID"), "strike": r.get("STRIKE"),
+                   "iv": r.get("VOLAT"), "last": r.get("LAST"),
+                   "theor_price": r.get("THEORPRICE"),
+                   "bid": r.get("BID"), "offer": r.get("OFFER"),
+                   "oi": r.get("OPENPOSITION"), "volume": r.get("VOLTODAY")}
+                  for r in put_rows],
+    }
