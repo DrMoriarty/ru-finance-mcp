@@ -536,6 +536,20 @@ def cbr_reserves(first_date: str | None = None, last_date: str | None = None,
     return cbr.reserves(first_date, last_date, tail)
 
 
+@mcp.tool()
+def cbr_inflation(first_date: str | None = None, last_date: str | None = None,
+                  tail: int = 24) -> dict:
+    """Инфляция (CPI, % г/г) и ключевая ставка ЦБ РФ (помесячно, с 2013 г.).
+
+    Источник — cbr.ru/hd_base/infl/. Кэш 4 ч. Даты — 'YYYY-MM' или 'YYYY-MM-DD'.
+    Возврат: {latest_inflation, latest_key_rate, latest_inflation_target, latest_date,
+    series: [{date, key_rate, inflation_yoy, inflation_target}, ...]}.
+    inflation_yoy — годовая инфляция Росстат (% г/г). inflation_target — цель ЦБ РФ (%).
+    Для расчёта реальной доходности облигаций и портфеля.
+    """
+    return cbr.inflation(first_date, last_date, tail)
+
+
 # ─────────────────────────── Облигационная математика ───────────────────────────
 @mcp.tool()
 def bond_report(query: str) -> dict:
