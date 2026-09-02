@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from .session import exec_template, first, get_moex, raw_get, records
+from .session import exec_template, first, get_moex, records
 
 # ID шаблонов ISS (определены интроспекцией aioboy/moex)
 T_SEARCH = 205   # /securities                                  (поиск)
@@ -173,13 +173,6 @@ def history(query: str, frm: str, till: str) -> list[dict]:
         "board": r["board"], "security": r["secid"]},
         {"from": frm, "till": till})
     return records(raw, "history")
-
-
-def dividends(query: str) -> list[dict]:
-    """История дивидендов (эндпоинт вне шаблонов aioboy — прямой GET)."""
-    r = resolve(query)
-    raw = raw_get(f"securities/{r['secid']}/dividends")
-    return records(raw, "dividends")
 
 
 def search_endpoints(pattern: str) -> list[dict]:

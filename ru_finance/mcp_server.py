@@ -112,12 +112,6 @@ def moex_history(query: str, frm: str, till: str) -> list[dict]:
 
 
 @mcp.tool()
-def moex_dividends(query: str) -> list[dict]:
-    """История дивидендов по бумаге (value, валюта, дата отсечки registryclosedate)."""
-    return moex.dividends(query)
-
-
-@mcp.tool()
 def moex_search_endpoints(pattern: str) -> list[dict]:
     """Найти ISS-эндпоинты по подстроке пути (для доступа к данным без готовой ручки).
 
@@ -144,8 +138,7 @@ def moex_query(template_id: int, vars: dict | None = None,
 def smartlab_dividends(limit: int = 50) -> list[dict]:
     """Календарь ближайших дивидендов со smart-lab.ru (данные, не ISS).
 
-    moex_dividends не возвращает данные (эндпоинт пуст/пейволлен), поэтому берём
-    календарь с публичного портала smart-lab.ru. Возврат: {name, ticker, period,
+    Возврат: {name, ticker, period,
     dividend_rub, yield_pct, board_approved, last_buy_date, close_date,
     payment_date, price}. dividend_rub — ₽ за акцию; yield_pct — див. доходность %.
     """

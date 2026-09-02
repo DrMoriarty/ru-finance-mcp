@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 
-from . import bonds, cbr, moex
+from . import bonds, cbr, moex, smartlab
 
 _LINE = re.compile(r"^-\s*(?P<name>.+?)\s*:\s*(?P<qty>[\d ]+)\s*шт\.?\s*\((?P<prices>[^)]*)\)")
 _TICKER = re.compile(r"\(([A-Z0-9]{1,12})\)\s*$")
@@ -233,16 +233,17 @@ def income_calendar(assets_text: str) -> dict:
                     "amount_rub": round(pos["qty"] * b["coupon_value"], 2),
                 })
         else:
+            ticker = pos["search_key"]
             try:
-                divs = moex.dividends(pos["search_key"])
+                divs = smartlab.get_dividend_history(ticker)
             except Exception:  # noqa: BLE001
                 divs = []
             if divs:
                 last = divs[-1]
-                val = last.get("value")
+                val = last.get("dividend_rub")
                 if val:
                     events.append({
-                        "date": last.get("registryclosedate"),
+                        "date": last.get("cutoff_date"),
                         "type": "дивиденд (последний объявленный)",
                         "name": pos["name"],
                         "amount_rub": round(pos["qty"] * val, 2),
