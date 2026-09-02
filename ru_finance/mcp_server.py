@@ -562,10 +562,18 @@ def bond_report(query: str) -> dict:
     twist_scenarios — сценарии сужения/расширения кривой.
     spread_to_curve — спред YTM к G-кривой на сопоставимой дюрации.
     gry — gross redemption yield (YTM с учётом НКД).
-    real_return — реальная доходность при разной инфляции.
+    real_return — реальная доходность: actual_inflation_pct + actual_real_return_pct
+    (фактический CPI Росстат) + scenarios (при разных допущениях).
     """
     b = moex.bond(query)
     rep: dict = {"bond": b}
+
+    # Текущая инфляция (CPI) для расчёта реальной доходности
+    try:
+        infl_data = cbr.inflation(tail=1)
+        actual_inflation = infl_data.get("latest_inflation")
+    except Exception:  # noqa: BLE001
+        actual_inflation = None
 
     # Срок до погашения
     if b.get("maturity"):
@@ -586,7 +594,7 @@ def bond_report(query: str) -> dict:
             date.today(), mat, c_pct, ytm, b.get("face_value") or 1000)
         rep["scenarios"] = bonds.rate_scenarios(
             mat, c_pct, ytm, today=str(date.today()))
-        rep["real_return"] = bonds.real_return(ytm)
+        rep["real_return"] = bonds.real_return(ytm, actual_inflation=actual_inflation)
         if b.get("price_pct"):
             rep["gry"] = bonds.gry(
                 date.today(), mat, c_pct, b["price_pct"],
@@ -670,9 +678,15 @@ def portfolio_snapshot(assets: str) -> dict:
     строки '- Название (ТИКЕР/ISIN): N шт. (цена_покупки ...)', '%' = облигация.
     Сервер generic: конкретные бумаги приходят ТОЛЬКО в этом параметре.
     Позиции включают spread_to_curve_pp (спред к G-кривой) и div_yield_pct.
-    income_risk — реальная доходность портфеля (running_yield − ключевая ставка).
+    income_risk — реальная доходность портфеля (running_yield − CPI Росстат;
+    если CPI недоступна — ключевая ставка как приближение).
     """
-    return portfolio.snapshot(assets)
+    try:
+        infl_data = cbr.inflation(tail=1)
+        inflation_pct = infl_data.get("latest_inflation")
+    except Exception:  # noqa: BLE001
+        inflation_pct = None
+    return portfolio.snapshot(assets, inflation_pct=inflation_pct)
 
 
 @mcp.tool()

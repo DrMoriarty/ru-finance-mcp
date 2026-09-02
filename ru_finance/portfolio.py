@@ -154,8 +154,12 @@ def _enrich(pos: dict) -> dict:
     return p
 
 
-def snapshot(assets_text: str) -> dict:
-    """Полный снимок портфеля: позиции, распределение, риск по ставке, поток."""
+def snapshot(assets_text: str, inflation_pct: float | None = None) -> dict:
+    """Полный снимок портфеля: позиции, распределение, риск по ставке, поток.
+
+    inflation_pct — фактическая годовая инфляция (% г/г, CPI Росстат).
+    Если не передана, используется ключевая ставка как приближение.
+    """
     positions = [_enrich(p) for p in parse_assets(assets_text)]
     total = sum(p["value"] for p in positions if p.get("value"))
     cost = sum(p["cost"] for p in positions if p.get("cost"))
@@ -192,12 +196,15 @@ def snapshot(assets_text: str) -> dict:
     income = coupon_income + mm_income + div_income
 
     running_yield_pct = round(income / total * 100, 1) if total else None
-    infl = round(key, 1)  # ключевая ставка как оценка инфляции (грубое приближение)
+    infl_cp = inflation_pct if inflation_pct is not None else key
+    infl = round(infl_cp, 1)
     real_yield_pct = round(running_yield_pct - infl, 1) if running_yield_pct is not None else None
 
     return {
         "as_of": _refresh_date(assets_text),
         "key_rate": key,
+        "inflation_pct": infl,
+        "inflation_source": "cpi" if inflation_pct is not None else "key_rate_proxy",
         "total_value": round(total, 0),
         "total_cost": round(cost, 0),
         "pnl": round(total - cost, 0),
@@ -226,10 +233,11 @@ def snapshot(assets_text: str) -> dict:
         },
         "income_risk": {
             "running_yield_pct": running_yield_pct,
-            "key_rate_for_real_est": infl,
+            "inflation_pct": infl,
+            "inflation_source": "cpi" if inflation_pct is not None else "key_rate_proxy",
             "real_yield_est_pct": real_yield_pct,
-            "note": ("реальная доходность = running_yield − ключевая ставка "
-                     "(приближение, не точная инфляция)"),
+            "note": ("реальная доходность = running_yield − инфляция "
+                     "(CPI Росстат, если передана; иначе ключевая ставка)"),
         },
     }
 

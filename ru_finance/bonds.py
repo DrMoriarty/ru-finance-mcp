@@ -91,11 +91,25 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
     }
 
 
-def real_return(ytm: float, inflations=(4, 6, 8, 10, 12, 14, 16)) -> list[dict]:
-    """Реальная доходность к погашению (номинал YTM зафиксирован) при разной инфляции."""
-    return [{"inflation_pct": i,
-             "real_return_pct": round(((1 + ytm / 100) / (1 + i / 100) - 1) * 100, 1)}
-            for i in inflations]
+def real_return(ytm: float, inflations=(4, 6, 8, 10, 12, 14, 16),
+                actual_inflation: float | None = None) -> dict | list[dict]:
+    """Реальная доходность к погашению при разных допущениях по инфляции.
+
+    actual_inflation — фактический уровень CPI (% г/г). Если передан, возвращает dict:
+    {actual_inflation_pct, actual_real_return_pct, scenarios: [{inflation_pct, real_return_pct}, ...]}.
+    Без actual_inflation — только list[{inflation_pct, real_return_pct}] (совместимость).
+    """
+    scenarios = [{"inflation_pct": i,
+                  "real_return_pct": round(((1 + ytm / 100) / (1 + i / 100) - 1) * 100, 1)}
+                 for i in inflations]
+    if actual_inflation is None:
+        return scenarios
+    return {
+        "actual_inflation_pct": actual_inflation,
+        "actual_real_return_pct": round(
+            ((1 + ytm / 100) / (1 + actual_inflation / 100) - 1) * 100, 1),
+        "scenarios": scenarios,
+    }
 
 
 def convexity(valdate: date, maturity: date, coupon_rate: float,

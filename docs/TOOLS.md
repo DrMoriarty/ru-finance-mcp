@@ -312,7 +312,7 @@ MIACR — фактические средневзвешенные ставки �
   - `spread_to_curve` — спред YTM к G-кривой: `{spread_pp, bond_ytm, curve_yield}`;
   - `scenarios` — `{macaulay_years, breakeven_yield_rise_pp, scenarios:[{delta_pp, total_return_pct}]}` (полный доход за год при параллельном сдвиге ±п.п. + точка безубытка);
   - `twist_scenarios` — сценарии сужения/расширения кривой: `[{name, delta_pp, total_return_pct, description}]` (steepener/flattener/twist_short/twist_long);
-  - `real_return` — `[{inflation_pct, real_return_pct}]` (доходность к погашению за вычетом инфляции).
+  - `real_return` — `{actual_inflation_pct, actual_real_return_pct, scenarios: [{inflation_pct, real_return_pct}]}` (реальная доходность при фактическом CPI Росстат + сценарии при разных допущениях).
 - **Пример:** `bond_report("26253")` → при −2 п.п. годовой доход ≈ +27%, безубыток при росте доходности до ~+3.4 п.п.
 
 ### 🧮 `bond_accrued_interest(query)`
@@ -361,14 +361,15 @@ refresh date: 2026-06-27        # опц.
 
 ### 🧮 `portfolio_snapshot(assets)`
 Главная ручка — полный снимок портфеля. Включает дивидендную доходность акций, спред облигаций к кривой и реальную доходность.
-- **Возвращает:** `{as_of, key_rate, total_value, total_cost, pnl, pnl_pct, positions[], allocation[], rate_risk, income, income_risk}`.
+- **Возвращает:** `{as_of, key_rate, inflation_pct, inflation_source, total_value, total_cost, pnl, pnl_pct, positions[], allocation[], rate_risk, income, income_risk}`.
+  - `inflation_pct` — фактическая CPI (% г/г) из Росстат; `inflation_source` = `"cpi"` (если CPI доступна) или `"key_rate_proxy"` (fallback);
   - `positions[]` — `{name, secid, account, bucket, qty, price, value, weight_pct, pnl_pct, change_pct, ytm, duration_years, spread_to_curve_pp, div_yield_pct}`;
     - `spread_to_curve_pp` — спред YTM облигации к G-кривой на сопоставимой дюрации (п.п.);
     - `div_yield_pct` — дивидендная доходность акции (последний объявленный дивиденд / цена);
   - `allocation[]` — по корзинам (Длинные ОФЗ / Фонды акций / Акции / Корп. облигации / Денежный рынок);
   - `rate_risk` — `{portfolio_mod_duration_years, per_plus_1pp_pct/rub, per_minus_1pp_pct/rub}`;
   - `income` — `{annual_coupons, annual_money_market, annual_dividends, annual_total_est, running_yield_pct}`;
-  - `income_risk` — `{running_yield_pct, key_rate_for_real_est, real_yield_est_pct}` — реальная доходность портфеля (running_yield − ключевая ставка, приближение).
+  - `income_risk` — `{running_yield_pct, inflation_pct, inflation_source, real_yield_est_pct}` — реальная доходность портфеля (running_yield − CPI Росстат).
 
 ### 🧮 `portfolio_rate_whatif(delta_pp, assets)`
 Что станет с портфелем при сдвиге доходностей облигаций на `delta_pp` п.п.
