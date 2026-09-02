@@ -124,16 +124,34 @@ def parse_dividends_table(html: str) -> list[dict[str, Any]]:
     return results
 
 
-def parse_dividend_history_table(html: str) -> list[dict[str, Any]]:
-    """История дивидендов по тикеру (таблица из /q/{ticker}/dividend/).
+def _payout_tables(html: str) -> list[Tag]:
+    """Только выплатные таблицы /q/{ticker}/dividend/ (пропускает матрицы
+    сводки по годам).
 
-    Колонки: Тикер, дата T-1, дата отсечки, Период, дивиденд, Цена акции,
+    Выплатная таблица распознаётся по шапке из <th> с колонками «Тикер» и
+    «Див.доходность». Матрица сводки использует смешанные th/td (годы в шапке)
+    и в результат не попадает.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    out = []
+    for table in soup.find_all("table"):
+        header_cells = []
+        for tr in table.find_all("tr"):
+            cells = tr.find_all(["td", "th"])
+            if cells and all(c.name == "th" for c in cells):
+                header_cells = [c.get_text().strip() for c in cells]
+                break
+        if header_cells and "Тикер" in header_cells and "Див.доходность" in header_cells:
+            out.append(table)
+    return out
+
+
+def parse_dividend_history_table(table: Tag) -> list[dict[str, Any]]:
+    """Одна выплатная таблица /q/{ticker}/dividend/.
+
+    Колонки: Тикер, дата T-1, дата отсечки, Период, дивенд, Цена акции,
     Див.доходность.
     """
-    table = _get_table(html)
-    if not table:
-        return []
-
     rows = _table_rows(table)
     # найти строку заголовка (все ячейки <th>) и пропустить её + строки-разделители
     header_idx = None
@@ -178,4 +196,17 @@ def get_dividend_history(ticker: str) -> list[dict[str, Any]]:
     акцию; yield_pct — дивидендная доходность %.
     """
     html = _fetch(f"/q/{ticker.upper()}/dividend/")
-    return parse_dividend_history_table(html)
+    results: list[dict[str, Any]] = []
+    for table in _payout_tables(html):
+        results.extend(parse_dividend_history_table(table))
+
+    def _sort_key(row: dict[str, Any]) -> str:
+        """DD.MM.YYYY → YYYYMMDD для хронологической сортировки."""
+        d = row.get("cutoff_date") or ""
+        if "." in d:
+            dd, mm, yyyy = d.split(".")
+            return f"{yyyy}{mm}{dd}"
+        return d
+
+    # хронологический порядок (история → ожидаемые выплаты)
+    return sorted(results, key=_sort_key)
