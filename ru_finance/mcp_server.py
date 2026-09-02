@@ -566,8 +566,8 @@ def bond_report(query: str) -> dict:
     # Конвексность и GRY
     ytm = b.get("ytm")
     mat = b.get("maturity")
-    c_pct = b.get("coupon_pct")
-    if mat and c_pct and ytm:
+    c_pct = b.get("coupon_pct") or 0
+    if mat and ytm:
         rep["convexity"] = bonds.convexity(
             date.today(), mat, c_pct, ytm, b.get("face_value") or 1000)
         rep["scenarios"] = bonds.rate_scenarios(
@@ -580,7 +580,7 @@ def bond_report(query: str) -> dict:
 
     # Twist-сценарии
     dur = b.get("duration_years")
-    if mat and c_pct and ytm and dur:
+    if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
             mat, c_pct, ytm, dur, today=str(date.today()))
 
