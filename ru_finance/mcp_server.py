@@ -61,21 +61,29 @@ def current_datetime() -> dict:
 
 # ─────────────────────────── MOEX (Московская биржа) ───────────────────────────
 @mcp.tool()
-def moex_resolve(query: str, sec_type: str | None = None,
-                 as_list: bool = False) -> dict | list[dict]:
-    """Определить бумагу по тикеру/ISIN/названию.
+def moex_resolve(query: str) -> dict:
+    """Определить одну бумагу по тикеру/ISIN/названию.
 
     Вход: query — 'SBER', 'RU000A10C6F7', '26253', 'Сбербанк'.
-          sec_type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
-          as_list — если True, вернуть все совпадения (до 200) вместо одного.
-    Возврат (по умолч.): {secid, engine, market, board, type, shortname, isin, ...}.
-    Возврат (as_list=True): [{secid, shortname, isin, type, group, ...}, ...].
-    Примеры:
-      moex_resolve("Сбербанк")                          → одна лучшая бумага
-      moex_resolve("Сбербанк", sec_type="bond")         → одна облигация
-      moex_resolve("Сбербанк", sec_type="bond", as_list=True) → все облигации Сбербанка
+    Возврат: {secid, engine, market, board, type, shortname, isin, group, is_traded}.
+    Для списка бумаг (все облигации эмитента, все фонды) используй moex_search.
     """
-    return moex.resolve(query, sec_type=sec_type, as_list=as_list)
+    return moex.resolve(query)
+
+
+@mcp.tool()
+def moex_search(query: str, sec_type: str | None = None) -> list[dict]:
+    """Поиск бумаг на MOEX по тикеру/ISIN/названию — возвращает массив.
+
+    Вход: query — 'Сбербанк', 'Тинькофф', 'SBER', 'RU000A10C6F7'.
+          sec_type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
+    Возврат: [{secid, shortname, isin, type, group, is_traded, engine, market, board}, ...].
+    Примеры:
+      moex_search("Сбербанк")                → все бумаги Сбербанка
+      moex_search("Сбербанк", sec_type="bond") → только облигации
+      moex_search("Тинькофф", sec_type="fund") → только фонды
+    """
+    return moex.resolve(query, sec_type=sec_type, as_list=True)
 
 
 @mcp.tool()

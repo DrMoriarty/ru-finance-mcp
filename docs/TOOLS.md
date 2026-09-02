@@ -24,14 +24,18 @@
 
 ## MOEX — Московская биржа
 
-### 🟢 `moex_resolve(query, type=None, list=False)`
-Определить, как ISS адресует бумагу (акция/облигация/фонд/индекс).
+### 🟢 `moex_resolve(query)`
+Определить одну бумагу по тикеру/ISIN/номеру ОФЗ/названию.
 - **Принимает:** `query` — тикер/ISIN/номер ОФЗ/название (`"SBER"`, `"26253"`, `"RU000A10C6F7"`).
-  `type` — фильтр: `"bond"`, `"share"`, `"stock"`, `"fund"`, `"etf"`, `"index"`.
-  `list` — если `True`, вернуть все совпадения (до 200) вместо одного.
-- **Возвращает (по умолч.):** `{secid, engine, market, board, type, shortname, isin, group, is_traded}`.
-- **Возвращает (list=True):** `[{secid, shortname, isin, type, group, ...}, ...]`.
-- **Примеры:** `moex_resolve("26253")` → одна бумага; `moex_resolve("Сбербанк", type="bond", list=True)` → все облигации Сбербанка.
+- **Возвращает:** `{secid, engine, market, board, type, shortname, isin, group, is_traded}`.
+- **Пример:** `moex_resolve("26253")` → `{"secid":"SU26253RMFS3","market":"bonds",...}`
+
+### 🟢 `moex_search(query, sec_type=None)`
+Поиск бумаг на MOEX — возвращает массив совпадений (до 200).
+- **Принимает:** `query` — тикер/ISIN/название (`"Сбербанк"`, `"Тинькофф"`).
+  `sec_type` — фильтр: `"bond"`, `"share"`, `"stock"`, `"fund"`, `"etf"`, `"index"`.
+- **Возвращает:** `[{secid, shortname, isin, type, group, is_traded, engine, market, board}, ...]`.
+- **Примеры:** `moex_search("Сбербанк")` → все бумаги; `moex_search("Сбербанк", sec_type="bond")` → только облигации.
 
 ### 🟢 `moex_quote(query)`
 Текущая котировка акции/фонда (нормализованная, с фоллбэком цены).
