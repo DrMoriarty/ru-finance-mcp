@@ -31,26 +31,60 @@ def _engine_market(group: str | None) -> tuple[str, str]:
     return engine, _MARKET.get(suffix, suffix)
 
 
-def resolve(query: str, sec_type: str | None = None) -> dict:
+def resolve(query: str, sec_type: str | None = None,
+            as_list: bool = False) -> dict | list[dict]:
     """Тикер/ISIN/название -> {secid, engine, market, board, type, ...}.
 
-    sec_type — если задан (напр. "bond" или "share"), предпочитает бумаги
-    из соответствующей группы (stock_bonds, stock_shares).
+    sec_type — если задан (напр. "bond", "share", "fund"), фильтрует по типу
+    бумаги (stock_bonds, stock_shares, ...). Без фильтра возвращает лучшую
+    бумагу по скору.
 
-    Берёт лучшее совпадение: точный secid/ISIN > торгуемая > не индекс/NAV.
+    as_list — если True, возвращает все совпадения (до 200) вместо одного.
+    Удобно для «найди мне все облигации Сбербанка» или «все фонды Тинькофф».
     """
+    limit = 200 if as_list else 50
     q = query.strip()
-    raw = exec_template(T_SEARCH, params={"q": q, "limit": 50})
+    raw = exec_template(T_SEARCH, params={"q": q, "limit": limit})
     rows = records(raw, "securities")
     if not rows:
         raise ValueError(f"MOEX: не найдено бумаг по запросу {query!r}")
-    qu = q.upper()
 
     _GROUP_PREF = {
         "bond": "stock_bonds",
         "share": "stock_shares",
         "stock": "stock_shares",
+        "fund": "stock_ppif",
+        "etf": "stock_etf",
+        "index": "stock_index",
     }
+    target_group = _GROUP_PREF.get(sec_type.lower()) if sec_type else None
+
+    def _fmt(r: dict) -> dict:
+        engine, market = _engine_market(r.get("group"))
+        return {
+            "secid": r.get("secid"),
+            "shortname": r.get("shortname"),
+            "isin": r.get("isin"),
+            "engine": engine,
+            "market": market,
+            "board": r.get("primary_boardid"),
+            "type": r.get("type"),
+            "group": r.get("group"),
+            "is_traded": r.get("is_traded"),
+        }
+
+    # фильтр по типу (если задан)
+    if target_group:
+        rows = [r for r in rows if r.get("group") == target_group]
+        if not rows:
+            raise ValueError(
+                f"MOEX: по запросу {query!r} не найдено бумаг типа {sec_type!r}"
+            )
+
+    if as_list:
+        return [_fmt(r) for r in rows]
+
+    qu = q.upper()
 
     def score(r: dict) -> int:
         s = 0
@@ -60,26 +94,14 @@ def resolve(query: str, sec_type: str | None = None) -> dict:
             s += 100
         if r.get("is_traded") == 1:
             s += 10
-        if r.get("group") != "stock_index":  # предпочесть торгуемую бумагу, не NAV/индекс
+        if r.get("group") != "stock_index":
             s += 5
-        if sec_type and r.get("group") == _GROUP_PREF.get(sec_type):
+        if target_group and r.get("group") == target_group:
             s += 50
         return s
 
     best = max(rows, key=score)
-    engine, market = _engine_market(best.get("group"))
-    return {
-        "secid": best.get("secid"),
-        "shortname": best.get("shortname"),
-        "isin": best.get("isin"),
-        "engine": engine,
-        "market": market,
-        "board": best.get("primary_boardid"),
-        "type": best.get("type"),
-        "group": best.get("group"),
-        "is_traded": best.get("is_traded"),
-        "query": query,
-    }
+    return _fmt(best) | {"query": query}
 
 
 def _marketdata_row(secid: str, engine: str, market: str, board: str) -> dict:

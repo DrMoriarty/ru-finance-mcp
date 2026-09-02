@@ -61,14 +61,21 @@ def current_datetime() -> dict:
 
 # ─────────────────────────── MOEX (Московская биржа) ───────────────────────────
 @mcp.tool()
-def moex_resolve(query: str) -> dict:
+def moex_resolve(query: str, type: str | None = None,
+                 list: bool = False) -> dict | list[dict]:
     """Определить бумагу по тикеру/ISIN/названию.
 
     Вход: query — 'SBER', 'RU000A10C6F7', '26253', 'Сбербанк'.
-    Возврат: {secid, engine, market, board, type, shortname, isin}.
-    Нужен, когда неясно, как ISS адресует бумагу (акция/облигация/фонд/индекс).
+          type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
+          list — если True, вернуть все совпадения (до 200) вместо одного.
+    Возврат (по умолч.): {secid, engine, market, board, type, shortname, isin, ...}.
+    Возврат (list=True): [{secid, shortname, isin, type, group, ...}, ...].
+    Примеры:
+      moex_resolve("Сбербанк")                    → одна лучшая бумага
+      moex_resolve("Сбербанк", type="bond")       → одна облигация
+      moex_resolve("Сбербанк", type="bond", list=True) → все облигации Сбербанка
     """
-    return moex.resolve(query)
+    return moex.resolve(query, sec_type=type, as_list=list)
 
 
 @mcp.tool()

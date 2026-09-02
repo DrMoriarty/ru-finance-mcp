@@ -24,11 +24,14 @@
 
 ## MOEX — Московская биржа
 
-### 🟢 `moex_resolve(query)`
+### 🟢 `moex_resolve(query, type=None, list=False)`
 Определить, как ISS адресует бумагу (акция/облигация/фонд/индекс).
 - **Принимает:** `query` — тикер/ISIN/номер ОФЗ/название (`"SBER"`, `"26253"`, `"RU000A10C6F7"`).
-- **Возвращает:** `{secid, engine, market, board, type, shortname, isin, group, is_traded}`.
-- **Пример:** `moex_resolve("26253")` → `{"secid":"SU26253RMFS3","market":"bonds","board":"TQOB","type":"ofz_bond",...}`
+  `type` — фильтр: `"bond"`, `"share"`, `"stock"`, `"fund"`, `"etf"`, `"index"`.
+  `list` — если `True`, вернуть все совпадения (до 200) вместо одного.
+- **Возвращает (по умолч.):** `{secid, engine, market, board, type, shortname, isin, group, is_traded}`.
+- **Возвращает (list=True):** `[{secid, shortname, isin, type, group, ...}, ...]`.
+- **Примеры:** `moex_resolve("26253")` → одна бумага; `moex_resolve("Сбербанк", type="bond", list=True)` → все облигации Сбербанка.
 
 ### 🟢 `moex_quote(query)`
 Текущая котировка акции/фонда (нормализованная, с фоллбэком цены).
