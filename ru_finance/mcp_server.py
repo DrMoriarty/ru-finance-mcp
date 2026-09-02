@@ -94,6 +94,17 @@ def moex_bond(query: str) -> dict:
 
 
 @mcp.tool()
+def moex_bond_coupons(query: str) -> list[dict]:
+    """Расписание купонов облигации (история + будущие) из НРД/MOEX.
+
+    Вход: query — ISIN или номер ОФЗ. Возврат: [{coupondate, value, valueprc,
+    facevalue, faceunit, is_past, recorddate, startdate}, ...].
+    Для ОФЗ возвращает пустой список (данные ЦБ не в ISS). is_past=True — уже выплачен.
+    """
+    return moex.bond_coupons(query)
+
+
+@mcp.tool()
 def moex_candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
     """Свечи OHLCV за период. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
 

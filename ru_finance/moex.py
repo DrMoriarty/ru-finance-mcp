@@ -155,6 +155,33 @@ def bond(query: str) -> dict:
     }
 
 
+def bond_coupons(query: str) -> list[dict]:
+    """Расписание купонов облигации (история + будущие) из НРД/MOEX bondization.
+
+    Работает для корпоративных облигаций; ОФЗ возвращают пустой список (данные ЦБ).
+    """
+    r = resolve(query)
+    raw = raw_get(
+        f"statistics/engines/stock/markets/bonds/bondization/{r['isin']}/coupons",
+        {"limit": 500})
+    today = str(__import__("datetime").date.today())
+    rows: list[dict] = []
+    for row in records(raw, "coupons"):
+        rows.append({
+            "isin": row.get("isin"),
+            "coupondate": row.get("coupondate"),
+            "recorddate": row.get("recorddate"),
+            "startdate": row.get("startdate"),
+            "value": row.get("value"),
+            "valueprc": row.get("valueprc"),
+            "value_rub": row.get("value_rub"),
+            "facevalue": row.get("facevalue"),
+            "faceunit": row.get("faceunit"),
+            "is_past": (row.get("coupondate") or "") < today,
+        })
+    return rows
+
+
 def candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
     """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв)."""
     r = resolve(query)
