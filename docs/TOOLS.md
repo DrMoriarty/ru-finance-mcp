@@ -63,9 +63,9 @@
 - **Возвращает:** `[{id, path, variables}]`. `id` → в `moex_query`.
 - **Пример:** `moex_search_endpoints("turnovers")`
 
-### 🟢 `moex_query(template_id, vars=None, params=None)`
+### 🟢 `moex_query(template_id, path_vars=None, query_params=None)`
 Запасной доступ к ЛЮБОМУ из ~252 эндпоинтов ISS.
-- **Принимает:** `template_id` (из `moex_search_endpoints`); `vars` — переменные пути (`{engine, market, board, security}`); `params` — query-параметры (`{from, till, ...}`).
+- **Принимает:** `template_id` (из `moex_search_endpoints`); `path_vars` — переменные пути (`{engine, market, board, security}`); `query_params` — query-параметры (`{from, till, ...}`).
 - **Возвращает:** `{block: [строки]}`.
 - **Пример:** `moex_query(322, {"engine":"stock"}, {})`
 

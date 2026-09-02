@@ -61,21 +61,21 @@ def current_datetime() -> dict:
 
 # ─────────────────────────── MOEX (Московская биржа) ───────────────────────────
 @mcp.tool()
-def moex_resolve(query: str, type: str | None = None,
-                 list: bool = False) -> dict | list[dict]:
+def moex_resolve(query: str, sec_type: str | None = None,
+                 as_list: bool = False) -> dict | list[dict]:
     """Определить бумагу по тикеру/ISIN/названию.
 
     Вход: query — 'SBER', 'RU000A10C6F7', '26253', 'Сбербанк'.
-          type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
-          list — если True, вернуть все совпадения (до 200) вместо одного.
+          sec_type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
+          as_list — если True, вернуть все совпадения (до 200) вместо одного.
     Возврат (по умолч.): {secid, engine, market, board, type, shortname, isin, ...}.
-    Возврат (list=True): [{secid, shortname, isin, type, group, ...}, ...].
+    Возврат (as_list=True): [{secid, shortname, isin, type, group, ...}, ...].
     Примеры:
-      moex_resolve("Сбербанк")                    → одна лучшая бумага
-      moex_resolve("Сбербанк", type="bond")       → одна облигация
-      moex_resolve("Сбербанк", type="bond", list=True) → все облигации Сбербанка
+      moex_resolve("Сбербанк")                          → одна лучшая бумага
+      moex_resolve("Сбербанк", sec_type="bond")         → одна облигация
+      moex_resolve("Сбербанк", sec_type="bond", as_list=True) → все облигации Сбербанка
     """
-    return moex.resolve(query, sec_type=type, as_list=list)
+    return moex.resolve(query, sec_type=sec_type, as_list=as_list)
 
 
 @mcp.tool()
@@ -140,15 +140,15 @@ def moex_search_endpoints(pattern: str) -> list[dict]:
 
 
 @mcp.tool()
-def moex_query(template_id: int, vars: dict | None = None,
-               params: dict | None = None) -> dict:
+def moex_query(template_id: int, path_vars: dict | None = None,
+               query_params: dict | None = None) -> dict:
     """Generic-доступ к ЛЮБОМУ из ~252 эндпоинтов ISS по template_id.
 
-    Вход: template_id (из moex_search_endpoints), vars — переменные пути
-    (engine/market/board/security...), params — query-параметры (from/till/...).
+    Вход: template_id (из moex_search_endpoints), path_vars — переменные пути
+    (engine/market/board/security...), query_params — query-параметры (from/till/...).
     Возврат: {block: [строки]}. Запасной путь, когда нет именованной ручки.
     """
-    return moex.query(template_id, vars, params)
+    return moex.query(template_id, path_vars, query_params)
 
 
 # ───────────────────── MOEX: корпоративная информация (CCI/НРД) ─────────────────────
