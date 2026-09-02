@@ -31,8 +31,11 @@ def _engine_market(group: str | None) -> tuple[str, str]:
     return engine, _MARKET.get(suffix, suffix)
 
 
-def resolve(query: str) -> dict:
+def resolve(query: str, sec_type: str | None = None) -> dict:
     """Тикер/ISIN/название -> {secid, engine, market, board, type, ...}.
+
+    sec_type — если задан (напр. "bond" или "share"), предпочитает бумаги
+    из соответствующей группы (stock_bonds, stock_shares).
 
     Берёт лучшее совпадение: точный secid/ISIN > торгуемая > не индекс/NAV.
     """
@@ -42,6 +45,12 @@ def resolve(query: str) -> dict:
     if not rows:
         raise ValueError(f"MOEX: не найдено бумаг по запросу {query!r}")
     qu = q.upper()
+
+    _GROUP_PREF = {
+        "bond": "stock_bonds",
+        "share": "stock_shares",
+        "stock": "stock_shares",
+    }
 
     def score(r: dict) -> int:
         s = 0
@@ -53,6 +62,8 @@ def resolve(query: str) -> dict:
             s += 10
         if r.get("group") != "stock_index":  # предпочесть торгуемую бумагу, не NAV/индекс
             s += 5
+        if sec_type and r.get("group") == _GROUP_PREF.get(sec_type):
+            s += 50
         return s
 
     best = max(rows, key=score)
@@ -115,7 +126,7 @@ def quote(query: str) -> dict:
 
 def bond(query: str) -> dict:
     """Облигация: цена %, YTM, дюрация (годы), модиф. дюрация, купон, погашение, НКД."""
-    r = resolve(query)
+    r = resolve(query, sec_type="bond")
     raw = exec_template(T_QUOTE_BOARD, {
         "engine": r["engine"], "market": r["market"],
         "board": r["board"], "security": r["secid"]})
@@ -160,7 +171,7 @@ def bond_coupons(query: str) -> list[dict]:
 
     Работает для корпоративных облигаций; ОФЗ возвращают пустой список (данные ЦБ).
     """
-    r = resolve(query)
+    r = resolve(query, sec_type="bond")
     raw = raw_get(
         f"statistics/engines/stock/markets/bonds/bondization/{r['isin']}/coupons",
         {"limit": 500})
