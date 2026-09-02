@@ -15,6 +15,8 @@ def _to_date(d) -> date:
 
 
 def _coupon_dates(valdate: date, maturity: date, freq: int = 2) -> list[date]:
+    valdate = _to_date(valdate)
+    maturity = _to_date(maturity)
     step = round(365 / freq)
     out, d = [], maturity
     while d > valdate:
@@ -26,6 +28,8 @@ def _coupon_dates(valdate: date, maturity: date, freq: int = 2) -> list[date]:
 def dirty_price(valdate: date, maturity: date, coupon_rate: float,
                 ytm: float, face: float = 1000.0, freq: int = 2) -> float:
     """Грязная цена облигации (в рублях номинала) при заданной YTM, %."""
+    valdate = _to_date(valdate)
+    maturity = _to_date(maturity)
     c = coupon_rate / freq / 100 * face
     p = 0.0
     for d in _coupon_dates(valdate, maturity, freq):
@@ -38,6 +42,8 @@ def dirty_price(valdate: date, maturity: date, coupon_rate: float,
 def macaulay_duration(valdate: date, maturity: date, coupon_rate: float,
                       ytm: float, face: float = 1000.0, freq: int = 2) -> float:
     """Дюрация Маколея в годах (из денежных потоков)."""
+    valdate = _to_date(valdate)
+    maturity = _to_date(maturity)
     c = coupon_rate / freq / 100 * face
     pv_tot = w_tot = 0.0
     for d in _coupon_dates(valdate, maturity, freq):
@@ -99,6 +105,8 @@ def convexity(valdate: date, maturity: date, coupon_rate: float,
     Поправка к duration при больших сдвигах ставки:
     ΔP/P ≈ −D·Δy + ½·C·(Δy)²    (D — модиф. дюрация, C — конвексность).
     """
+    valdate = _to_date(valdate)
+    maturity = _to_date(maturity)
     c = coupon_rate / freq / 100 * face
     r = ytm / 100 / freq
     pv_tot = cx_tot = 0.0
