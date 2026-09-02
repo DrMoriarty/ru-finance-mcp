@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-25 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+36 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -65,6 +65,79 @@
 - **Принимает:** `template_id` (из `moex_search_endpoints`); `vars` — переменные пути (`{engine, market, board, security}`); `params` — query-параметры (`{from, till, ...}`).
 - **Возвращает:** `{block: [строки]}`.
 - **Пример:** `moex_query(322, {"engine":"stock"}, {})`
+
+### 🟢 `moex_company_info(query)`
+Справка об организации по ИНН/ОГРН/названию (данные НРД/CCI).
+- **Принимает:** `query` — ИНН, ОГРН или фрагмент названия.
+- **Возвращает:** `{companies: [{basis_company_id, inn, ogrn, name_short_ru, name_full_ru, lei_code, ...}]}`.
+- **Пример:** `moex_company_info("Сбербанк")`
+
+### 🟢 `moex_company_info_by_id(company_id)`
+Справка об организации по внутреннему ID MOEX (basis_company_id).
+- **Принимает:** `company_id` — числовой ID (узнаётся из `moex_company_info`).
+- **Возвращает:** `{inn, ogrn, name_short_ru, name_full_ru, lei_code, egrul_date, ...}`.
+
+### 🟢 `moex_ir_calendar(limit=50)`
+Календарь IR-мероприятий (даты отчётов публичных компаний).
+- **Принимает:** `limit` — сколько строк (по умолч. 50).
+- **Возвращает:** `[{company_name_short_ru, event_type_name, event_date, event_link, ...}]`.
+
+### 🟢 `moex_market_capitalization()`
+Капитализация фондового рынка (₽).
+- **Принимает:** ничего.
+- **Возвращает:** `{capitalization: { capitalization, tradedate }, issuecapitalization: { issuecapitalization, updatetime }}`.
+- **Пример:** `moex_market_capitalization()` → `{"capitalization":{"capitalization":42950671877090.26,"tradedate":"2026-09-01"}, ...}`
+
+### 🟢 `moex_correlations(secid)`
+Коэффициенты корреляции и бета для бумаги.
+- **Принимает:** `secid` — тикер (`"SBER"`).
+- **Возвращает:** `[{secid, fxsecid, tradedate, coeff_correlation, coeff_beta}]` — все пары с другими бумагами/индексами.
+- **Пример:** `moex_correlations("SBER")` → пары с GAZP, LKOH, IMOEX, ...
+
+### 🟢 `moex_splits(secid=None)`
+Справочник дроблений и консолидаций бумаг.
+- **Принимает:** `secid` (опционально). Без параметра — все сплиты.
+- **Возвращает:** `[{tradedate, secid, before, after}]`.
+- **Пример:** `moex_splits("VTB")` → `{tradedate:"2021-04-12", secid:"VTBB", before:1, after:10}`
+
+### 🟢 `moex_bond_market_aggregates(frm=None, till=None)`
+Агрегированные показатели рынка облигаций.
+- **Принимает:** `frm`/`till` (`"YYYY-MM-DD"`, опционально).
+- **Возвращает:** `[{tradedate, type_bond, iss_nominal, vol_nominal, coeff_nominal, avg_years, ...}]`.
+- Типы: Корпоративные, ОФЗ, Муниципальные и т.д.
+- **Пример:** `moex_bond_market_aggregates(frm="2026-09-01")`
+
+### 🟢 `moex_zcyc_history(frm, till)`
+История параметров КБД (Кривая Бескупонной Доходности).
+- **Принимает:** `frm`/`till` (`"YYYY-MM-DD"`).
+- **Возвращает:** `[{tradedate, b1, b2, b3, t1, g1..g9}]` — параметры НСС-модели для каждого дня.
+- Для бэктестинга кривой. См. также `curve_yield()` для NSS-модели на произвольном сроке.
+- **Пример:** `moex_zcyc_history("2026-06-01","2026-09-01")`
+
+### 🟢 `moex_turnovers()`
+Сводные обороты по рынкам (биржевые итоги).
+- **Принимает:** ничего.
+- **Возвращает:** `[{name, valtoday, valtoday_usd, numtrades, updatetime, title}]`.
+- Рынки: stock, currency, futures, commodity, ...
+- **Пример:** `moex_turnovers()` → фондовый ~13.5 млрд ₽, срочный ~51.3 млрд ₽
+
+### 🟢 `moex_sitenews(limit=20)`
+Новости Московской биржи.
+- **Принимает:** `limit` — сколько строк (по умолч. 20).
+- **Возвращает:** `[{id, tag, title, published_at, modified_at}]`.
+- **Пример:** `moex_sitenews(limit=5)`
+
+### 🟢 `moex_aggregates(query, date)`
+Агрегированные итоги торгов за дату по бумаге.
+- **Принимает:** `query` (тикер), `date` (`"YYYY-MM-DD"`).
+- **Возвращает:** `{securities: [...], marketdata: [...]} — полные итоги дня (SECID, SHORTNAME, ISSUESIZE, ...)`.
+
+### 🟢 `moex_indicative_rates(frm=None, till=None)`
+Индикативные курсы валют срочного рынка.
+- **Принимает:** `frm`/`till` (`"YYYY-MM-DD"`, опционально).
+- **Возвращает:** `[{tradedate, tradetime, secid, rate, clearing}]`.
+- `secid` — валютная пара (`"CNY/RUB"`, `"USD/RUB"`, ...).
+- **Пример:** `moex_indicative_rates()` → текущие курсы
 
 ### 🟢 `smartlab_dividends(limit=50)`
 Календарь ближайших дивидендов со smart-lab.ru.

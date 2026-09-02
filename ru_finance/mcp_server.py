@@ -133,6 +133,129 @@ def moex_query(template_id: int, vars: dict | None = None,
     return moex.query(template_id, vars, params)
 
 
+# ───────────────────── MOEX: корпоративная информация (CCI/НРД) ─────────────────────
+@mcp.tool()
+def moex_company_info(query: str) -> dict:
+    """Справка об организации по ИНН/ОГРН/названию.
+
+    Вход: query — ИНН, ОГРН или фрагмент названия.
+    Возврат: {companies: [{basis_company_id, inn, ogrn, name_short_ru, name_full_ru, ...}]}.
+    """
+    return moex.company_info(query)
+
+
+@mcp.tool()
+def moex_company_info_by_id(company_id: int) -> dict:
+    """Справка об организации по внутреннему ID MOEX (basis_company_id).
+
+    Вход: company_id — числовой ID (узнаётся из moex_company_info).
+    Возврат: {inn, ogrn, name_short_ru, name_full_ru, lei_code, ...}.
+    """
+    return moex.company_info_by_id(company_id)
+
+
+@mcp.tool()
+def moex_ir_calendar(limit: int = 50) -> list[dict]:
+    """Календарь IR-мероприятий (даты отчётов публичных компаний).
+
+    Вход: limit (по умолч. 50). Возврат: [{company_name, event_type, event_date, ...}].
+    """
+    return moex.ir_calendar(limit)
+
+
+# ───────────────────── MOEX: статистика рынка ─────────────────────
+@mcp.tool()
+def moex_market_capitalization() -> dict:
+    """Капитализация фондового рынка (₽).
+
+    Возврат: {capitalization, issuecapitalization, tradedate, updatetime}.
+    """
+    return moex.market_capitalization()
+
+
+@mcp.tool()
+def moex_correlations(secid: str) -> list[dict]:
+    """Коэффициенты корреляции и бета для бумаги.
+
+    Вход: secid (тикер, напр. 'SBER').
+    Возврат: [{secid, fxsecid, tradedate, coeff_correlation, coeff_beta}].
+    """
+    return moex.correlations(secid)
+
+
+@mcp.tool()
+def moex_splits(secid: str | None = None) -> list[dict]:
+    """Справочник дроблений и консолидаций бумаг.
+
+    Вход: secid (опционально). Без параметра — все сплиты.
+    Возврат: [{tradedate, secid, before, after}].
+    """
+    return moex.splits(secid)
+
+
+# ───────────────────── MOEX: рынок облигаций ─────────────────────
+@mcp.tool()
+def moex_bond_market_aggregates(frm: str | None = None,
+                                till: str | None = None) -> list[dict]:
+    """Агрегированные показатели рынка облигаций.
+
+    Вход: frm/till ('YYYY-MM-DD', опционально).
+    Возврат: [{tradedate, type_bond, iss_nominal, vol_nominal, avg_years, ...}].
+    """
+    return moex.bond_market_aggregates(frm, till)
+
+
+@mcp.tool()
+def moex_zcyc_history(frm: str, till: str) -> list[dict]:
+    """История параметров КБД (Кривая Бескупонной Доходности).
+
+    Вход: frm/till ('YYYY-MM-DD'). Возврат: [{tradedate, b1,b2,b3, t1, g1..g9}].
+    Параметры НСС-модели для каждого дня — для бэктестинга кривой.
+    """
+    return moex.zcyc_history(frm, till)
+
+
+# ───────────────────── MOEX: активность и курсы ─────────────────────
+@mcp.tool()
+def moex_turnovers() -> list[dict]:
+    """Сводные обороты по рынкам (биржевые итоги).
+
+    Возврат: [{name, valtoday, valtoday_usd, numtrades, updatetime, title}].
+    Рынки: stock, currency, futures, commodity, ...
+    """
+    return moex.turnovers()
+
+
+@mcp.tool()
+def moex_sitenews(limit: int = 20) -> list[dict]:
+    """Новости Московской биржи.
+
+    Вход: limit (по умолч. 20). Возврат: [{id, tag, title, published_at}].
+    """
+    return moex.sitenews(limit)
+
+
+@mcp.tool()
+def moex_aggregates(query: str, date: str) -> dict:
+    """Агрегированные итоги торгов за дату по бумаге.
+
+    Вход: query (тикер), date ('YYYY-MM-DD').
+    Возврат: {securities: [...], marketdata: [...]} — полные итоги дня.
+    """
+    return moex.aggregates(query, date)
+
+
+@mcp.tool()
+def moex_indicative_rates(frm: str | None = None,
+                          till: str | None = None) -> list[dict]:
+    """Индикативные курсы валют срочного рынка.
+
+    Вход: frm/till ('YYYY-MM-DD', опционально).
+    Возврат: [{tradedate, tradetime, secid, rate, clearing}].
+    """
+    return moex.indicative_rates(frm, till)
+
+
 # ─────────────────────────── Дивиденды (smart-lab.ru) ───────────────────────────
 @mcp.tool()
 def smartlab_dividends(limit: int = 50) -> list[dict]:
