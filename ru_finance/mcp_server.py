@@ -57,7 +57,12 @@ mcp = FastMCP(
 # ─────────────────────────── Utilities ───────────────────────────
 @mcp.tool()
 def current_datetime() -> dict:
-    """Server date and time (UTC+0, ISO 8601)."""
+    """Server date and time (UTC+0, ISO 8601).
+
+    IMPORTANT: Always call this FIRST before using any historical data tools.
+    Many instruments require an explicit end date — use the returned `date` as
+    `last_date` (or `date_to`) to avoid confusing results or off-by-one errors.
+    """
     now = datetime.now()
     return {
         "datetime": now.isoformat(),
