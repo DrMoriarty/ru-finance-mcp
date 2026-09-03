@@ -592,6 +592,13 @@ def bond_report(query: str) -> dict:
     freq = _freq_from_coupon_period(b.get("coupon_period_days"))
 
     try:
+        coupon_schedule = moex.future_bond_coupons(query)
+    except Exception:  # noqa: BLE001
+        coupon_schedule = []
+    if coupon_schedule:
+        rep["coupon_schedule"] = coupon_schedule
+
+    try:
         infl_data = cbr.inflation(tail=1)
         actual_inflation = infl_data.get("latest_inflation")
     except Exception:  # noqa: BLE001
@@ -609,21 +616,25 @@ def bond_report(query: str) -> dict:
     ytm = b.get("ytm")
     mat = b.get("maturity")
     c_pct = b.get("coupon_pct") or 0
+    cs = coupon_schedule or None
     if mat and ytm:
         rep["convexity"] = bonds.convexity(
-            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq)
+            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq,
+            coupon_schedule=cs)
         rep["scenarios"] = bonds.rate_scenarios(
-            mat, c_pct, ytm, today=str(date.today()), freq=freq)
+            mat, c_pct, ytm, today=str(date.today()), freq=freq,
+            coupon_schedule=cs)
         rep["real_return"] = bonds.real_return(ytm, actual_inflation=actual_inflation)
         if b.get("price_pct"):
             rep["gry"] = bonds.gry(
                 date.today(), mat, c_pct, b["price_pct"],
-                b.get("face_value") or 1000, freq)
+                b.get("face_value") or 1000, freq, coupon_schedule=cs)
 
     dur = b.get("duration_years")
     if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
-            mat, c_pct, ytm, dur, today=str(date.today()), freq=freq)
+            mat, c_pct, ytm, dur, today=str(date.today()), freq=freq,
+            coupon_schedule=cs)
 
     if dur and ytm:
         try:

@@ -14,6 +14,20 @@ def _to_date(d) -> date:
     return datetime.strptime(str(d)[:10], "%Y-%m-%d").date()
 
 
+def _coupon_schedule_dict(coupon_schedule: list[dict] | None) -> dict[date, float] | None:
+    """Строит словарь {дата_купона -> ставка_%} из расписания.
+
+    coupon_schedule — [{date: 'YYYY-MM-DD', rate_pct: float}, ...].
+    """
+    if not coupon_schedule:
+        return None
+    out: dict[date, float] = {}
+    for s in coupon_schedule:
+        d = _to_date(s["date"])
+        out[d] = float(s["rate_pct"])
+    return out if out else None
+
+
 def _coupon_dates(valdate: date, maturity: date, freq: int = 2) -> list[date]:
     valdate = _to_date(valdate)
     maturity = _to_date(maturity)
@@ -26,29 +40,41 @@ def _coupon_dates(valdate: date, maturity: date, freq: int = 2) -> list[date]:
 
 
 def dirty_price(valdate: date, maturity: date, coupon_rate: float,
-                ytm: float, face: float = 1000.0, freq: int = 2) -> float:
-    """Грязная цена облигации (в рублях номинала) при заданной YTM, %."""
+                ytm: float, face: float = 1000.0, freq: int = 2,
+                coupon_schedule: list[dict] | None = None) -> float:
+    """Грязная цена облигации (в рублях номинала) при заданной YTM, %.
+
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
+    """
     valdate = _to_date(valdate)
     maturity = _to_date(maturity)
+    sched = _coupon_schedule_dict(coupon_schedule)
     c = coupon_rate / freq / 100 * face
     p = 0.0
     for d in _coupon_dates(valdate, maturity, freq):
         t = (d - valdate).days / 365
-        cf = c + (face if d == maturity else 0)
+        c_period = sched.get(d, coupon_rate) / freq / 100 * face if sched else c
+        cf = c_period + (face if d == maturity else 0)
         p += cf / (1 + ytm / 100 / freq) ** (freq * t)
     return p
 
 
 def macaulay_duration(valdate: date, maturity: date, coupon_rate: float,
-                      ytm: float, face: float = 1000.0, freq: int = 2) -> float:
-    """Дюрация Маколея в годах (из денежных потоков)."""
+                      ytm: float, face: float = 1000.0, freq: int = 2,
+                      coupon_schedule: list[dict] | None = None) -> float:
+    """Дюрация Маколея в годах (из денежных потоков).
+
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
+    """
     valdate = _to_date(valdate)
     maturity = _to_date(maturity)
+    sched = _coupon_schedule_dict(coupon_schedule)
     c = coupon_rate / freq / 100 * face
     pv_tot = w_tot = 0.0
     for d in _coupon_dates(valdate, maturity, freq):
         t = (d - valdate).days / 365
-        cf = c + (face if d == maturity else 0)
+        c_period = sched.get(d, coupon_rate) / freq / 100 * face if sched else c
+        cf = c_period + (face if d == maturity else 0)
         pv = cf / (1 + ytm / 100 / freq) ** (freq * t)
         pv_tot += pv
         w_tot += t * pv
@@ -58,27 +84,38 @@ def macaulay_duration(valdate: date, maturity: date, coupon_rate: float,
 def rate_scenarios(maturity, coupon_rate: float, ytm: float,
                    horizon_days: int = 365, face: float = 1000.0,
                    deltas=(-3, -2, -1, 0, 1, 2, 3), today: str | None = None,
-                   freq: int = 2) -> dict:
+                   freq: int = 2,
+                   coupon_schedule: list[dict] | None = None) -> dict:
     """Полный доход за горизонт при сдвиге доходности на delta п.п.
 
     Возвращает по каждому delta: total_return_pct = (цена_конца + купоны - цена_старта)/старт.
     Плюс точку безубытка по росту доходности.
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
     """
     t0 = _to_date(today) if today else date.today()
     mat = _to_date(maturity)
     t1 = t0 + timedelta(days=horizon_days)
-    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq)
-    annual_coupon = coupon_rate / 100 * face * (horizon_days / 365)
+    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq, coupon_schedule)
+
+    if coupon_schedule:
+        total_coupon = 0.0
+        for s in coupon_schedule:
+            d = _to_date(s["date"])
+            if t0 < d <= t1:
+                total_coupon += s["rate_pct"] / 100 * face
+    else:
+        total_coupon = coupon_rate / 100 * face * (horizon_days / 365)
+
     out = []
     for dy in deltas:
-        d1 = dirty_price(t1, mat, coupon_rate, ytm + dy, face, freq)
-        tr = (d1 + annual_coupon - d0) / d0 * 100
+        d1 = dirty_price(t1, mat, coupon_rate, ytm + dy, face, freq, coupon_schedule)
+        tr = (d1 + total_coupon - d0) / d0 * 100
         out.append({"delta_pp": dy, "total_return_pct": round(tr, 1)})
-    # безубыток: какой рост доходности обнуляет годовой доход
     lo, hi = 0.0, 10.0
     for _ in range(40):
         mid = (lo + hi) / 2
-        tr = (dirty_price(t1, mat, coupon_rate, ytm + mid, face, freq) + annual_coupon - d0) / d0
+        tr = (dirty_price(t1, mat, coupon_rate, ytm + mid, face, freq, coupon_schedule)
+              + total_coupon - d0) / d0
         if tr > 0:
             lo = mid
         else:
@@ -86,7 +123,8 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
     return {
         "ytm": ytm, "coupon_pct": coupon_rate, "maturity": str(mat),
         "horizon_days": horizon_days,
-        "macaulay_years": macaulay_duration(t0, mat, coupon_rate, ytm, face, freq),
+        "macaulay_years": macaulay_duration(t0, mat, coupon_rate, ytm, face, freq,
+                                            coupon_schedule),
         "scenarios": out,
         "breakeven_yield_rise_pp": round(lo, 2),
     }
@@ -114,20 +152,24 @@ def real_return(ytm: float, inflations=(4, 6, 8, 10, 12, 14, 16),
 
 
 def convexity(valdate: date, maturity: date, coupon_rate: float,
-              ytm: float, face: float = 1000.0, freq: int = 2) -> float:
+              ytm: float, face: float = 1000.0, freq: int = 2,
+              coupon_schedule: list[dict] | None = None) -> float:
     """Конвексность облигации (вторая производная цены по доходности, нормированная).
 
     Поправка к duration при больших сдвигах ставки:
     ΔP/P ≈ −D·Δy + ½·C·(Δy)²    (D — модиф. дюрация, C — конвексность).
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
     """
     valdate = _to_date(valdate)
     maturity = _to_date(maturity)
+    sched = _coupon_schedule_dict(coupon_schedule)
     c = coupon_rate / freq / 100 * face
     r = ytm / 100 / freq
     pv_tot = cx_tot = 0.0
     for d in _coupon_dates(valdate, maturity, freq):
         t = (d - valdate).days / 365
-        cf = c + (face if d == maturity else 0)
+        c_period = sched.get(d, coupon_rate) / freq / 100 * face if sched else c
+        cf = c_period + (face if d == maturity else 0)
         pv = cf / (1 + r) ** (freq * t)
         pv_tot += pv
         cx_tot += t * (t + 1 / freq) * pv
@@ -177,10 +219,11 @@ def accrued_interest(valdate: date, maturity: date, coupon_rate: float,
 
 
 def gry(valdate, maturity, coupon_rate, clean_price_pct, face: float = 1000.0,
-        freq: int = 2) -> dict:
+        freq: int = 2, coupon_schedule: list[dict] | None = None) -> dict:
     """Gross Redemption Yield (YTM с учётом НКД).
 
     Текущая чистая цена (clean) + НКД = грязная цена → YTM по DCF.
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
     Возвращает {gry_pct, dirty_price, accrued_rub}.
     """
     val = _to_date(valdate)
@@ -191,7 +234,7 @@ def gry(valdate, maturity, coupon_rate, clean_price_pct, face: float = 1000.0,
     lo, hi = -10.0, 50.0
     for _ in range(60):
         mid = (lo + hi) / 2
-        p = dirty_price(val, mat, coupon_rate, mid, face, freq)
+        p = dirty_price(val, mat, coupon_rate, mid, face, freq, coupon_schedule)
         if p > dp:
             lo = mid
         else:
@@ -223,14 +266,16 @@ def spread_to_curve(ytm: float, duration_years: float, curve_yield_at_duration: 
 
 def parallel_scenarios(valdate, maturity, coupon_rate, ytm, horizon_days=365,
                        face=1000.0, deltas=(-3, -2, -1, 0, 1, 2, 3),
-                       today=None) -> dict:
+                       today=None, coupon_schedule=None) -> dict:
     """Параллельные сценарии (alias для rate_scenarios для единообразия)."""
-    return rate_scenarios(maturity, coupon_rate, ytm, horizon_days, face, deltas, today)
+    return rate_scenarios(maturity, coupon_rate, ytm, horizon_days, face, deltas, today,
+                         coupon_schedule=coupon_schedule)
 
 
 def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: float,
                     horizon_days: int = 365, face: float = 1000.0,
-                    today: str | None = None, freq: int = 2) -> list[dict]:
+                    today: str | None = None, freq: int = 2,
+                    coupon_schedule: list[dict] | None = None) -> list[dict]:
     """Сценарии «кривая twist»: сужение/расширение короткого/длинного конца.
 
     twist_short: короткий конец −2 п.п., длинный +1 п.п. (на каждый год дюрации)
@@ -239,12 +284,21 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
     flattener: короткий +1, длинный −1
 
     Для каждой комбинации: delta_у по дюрации этой бумаги → total_return.
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, купоны per-period.
     """
     t0 = _to_date(today) if today else date.today()
     mat = _to_date(maturity)
     t1 = t0 + timedelta(days=horizon_days)
-    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq)
-    annual_coupon = coupon_rate / 100 * face * (horizon_days / 365)
+    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq, coupon_schedule)
+
+    if coupon_schedule:
+        total_coupon = 0.0
+        for s in coupon_schedule:
+            d = _to_date(s["date"])
+            if t0 < d <= t1:
+                total_coupon += s["rate_pct"] / 100 * face
+    else:
+        total_coupon = coupon_rate / 100 * face * (horizon_days / 365)
 
     dur = duration_years or 1.0
 
@@ -259,8 +313,8 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
         # Интерполяция: бумага с dur=0 двигается как короткий конец, dur>5 — как длинный
         weight_long = min(1.0, dur / 5.0)
         delta = tw["delta_short"] * (1 - weight_long) + tw["delta_long"] * weight_long
-        d1 = dirty_price(t1, mat, coupon_rate, ytm + delta, face, freq)
-        tr = (d1 + annual_coupon - d0) / d0 * 100
+        d1 = dirty_price(t1, mat, coupon_rate, ytm + delta, face, freq, coupon_schedule)
+        tr = (d1 + total_coupon - d0) / d0 * 100
         out.append({
             "name": tw["name"],
             "delta_pp": round(delta, 2),

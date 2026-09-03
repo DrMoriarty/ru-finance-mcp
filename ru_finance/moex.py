@@ -246,6 +246,29 @@ def bond_coupons(query: str) -> list[dict]:
     return rows
 
 
+def future_bond_coupons(query: str) -> list[dict]:
+    """Будущие купоны облигации с датами и ставками.
+
+    Возвращает [{date: 'YYYY-MM-DD', rate_pct: float}, ...] —
+    только купоны с датой > сегодня. Для переменных купонов.
+    """
+    try:
+        all_coups = bond_coupons(query)
+    except Exception:
+        return []
+    today_str = str(__import__("datetime").date.today())
+    out = []
+    for c in all_coups:
+        d = (c.get("coupondate") or "")[:10]
+        if d <= today_str:
+            continue
+        rate = c.get("valueprc")
+        if rate is None:
+            continue
+        out.append({"date": d, "rate_pct": float(rate)})
+    return sorted(out, key=lambda x: x["date"])
+
+
 def candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
     """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв)."""
     r = resolve(query)
