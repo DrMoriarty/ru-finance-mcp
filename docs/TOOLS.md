@@ -345,6 +345,18 @@ MIACR — фактические средневзвешенные ставки �
 - `sharpe` = (mean excess return / volatility) × sqrt(252); `max_drawdown_pct` — максимальная просадка от пика.
 - **Пример:** `price_volatility("SBER", 180)` → `{"annual_vol_pct":28.5,"sharpe":0.42,"max_drawdown_pct":12.3,...}`
 
+### 🧮 `liquidity_assessment(query, days=90)`
+Единая оценка ликвидности бумаги по данным свечей и текущих котировок.
+- **Принимает:** `query` (тикер), `days` (90 по умолчанию).
+- **Возвращает:** `{secid, trading_days, calendar_days, trading_day_ratio, zero_volume_days, avg_daily_turnover_rub, avg_daily_volume_lots, amihud_bps_per_mln, spread (%), spread_rub, spread_sources, composite_score (0-10), grade (A-E), note}`.
+  - `amihud_bps_per_mln` — коэффициент Амихуда: mean(|r_t|/V_t) × 10¹⁰ (bps на 1 млн ₽). Ниже = ликвиднее;
+  - `spread` — медиана оценок спреда: Corwin-Schultz из OHLC + фактический bid/ask (если доступен);
+  - `spread_sources` — [{method ("hl_proxy"|"bid_ask"), spread_pct, spread_rub}];
+  - `composite_score` — скор 0-10 на основе turnover и Amihud. Рассчитывается как log-линейная комбинация: высокий оборот + низкий Amihud = высокий скор;
+  - `grade` — `A` (отличная) ≥8, `B` (хорошая) ≥6, `C` (умеренная) ≥4, `D` (низкая) ≥2, `E` (<2).
+- **Пример:** `liquidity_assessment("SBER")` → `{"secid":"SBER","avg_daily_turnover_rub":9038700000,"amihud_bps_per_mln":0.02,"spread":0.053,"composite_score":9.7,"grade":"A",...}`
+- **Использование:** сравнение ликвидности бумаг; при large-cap score ≥8 (grade A) стакан плотный; score <4 (grade D-E) — сложность входа/выхода при крупных позициях.
+
 ---
 
 ## Ожидания по ставке (G-кривая ОФЗ)

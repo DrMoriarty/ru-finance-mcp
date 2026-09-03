@@ -1,11 +1,15 @@
 """Кредитные рейтинги Эксперт РА (raexpert.ru) — скрейпинг серверных таблиц.
 
 Источник — raexpert.ru/ratings/{category}/. Каждая страница содержит таблицу
-20 последних рейтинговых действий. Парсим все категории (банки, компании,
+20 рейтинговых действий с пагинацией. Парсим все категории (банки, компании,
 облигации, страховщики, НПФ и т.д.) и объединяем в единый индекс.
 
-Кэш в памяти на 4 ч (как в smartlab.py). Поиск — по подстроке названия
-(регистр-независимый). Для облигаций парсим название выпуска и эмитента.
+Кэш в памяти на 4 ч (как в smartlab.py). Поиск — подстрока + токены
+(все слова запроса в имени, порядок не важен). Для облигаций парсим название
+выпуска и эмитента.
+
+Категории загружаются параллельно (ThreadPoolExecutor, max_workers=3).
+Первый вызов ~1-2 мин (сеть), повторные — из кэша.
 
 Платный REST API существует (https://raexpert.ru/soap/service/export/?hash=...),
 но для бесплатного доступа только HTML-скрейпинг.
@@ -61,10 +65,11 @@ _RATING_RE = re.compile(
 _TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL)
 
 
-def _fetch_page(path: str) -> str:
+def _fetch_page(path: str, session: requests.Session | None = None) -> str:
     """GET страницы raexpert.ru."""
+    s = session or requests
     url = f"https://raexpert.ru{path}"
-    resp = requests.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
+    resp = s.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
     resp.raise_for_status()
     return resp.text
 
@@ -175,8 +180,42 @@ def _clean_outlook(outlook: str) -> str:
     return outlook
 
 
+CSRF_RE = re.compile(r"CSRFAjaxTokenPageHash\s*=\s*'([^']+)'")
+PAGE_HASH_RE = re.compile(r"setRatingPageHash\('([^']+)'\)")
+
+
+def _fetch_category_ratings(cat_id: str) -> list[dict[str, Any]]:
+    """Загрузить все страницы рейтингов одной категории (с пагинацией)."""
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+
+    path = f"/ratings/{cat_id}/"
+    html = _fetch_page(path, session)
+    all_rows = _parse_rating_rows(html, cat_id)
+
+    # Извлекаем CSRF-токен и хеши страниц из пагинатора
+    csrf_match = CSRF_RE.search(html)
+    page_hashes = PAGE_HASH_RE.findall(html)
+
+    if csrf_match and page_hashes:
+        csrf_token = csrf_match.group(1)
+        for ph in page_hashes:
+            try:
+                session.post(
+                    f"https://raexpert.ru/ratings/index/ajax-set-rating-page-hash/",
+                    data={"rating_page_hash": ph, "CSRFAjaxToken": csrf_token},
+                    timeout=15,
+                )
+                page_html = _fetch_page(path, session)
+                all_rows.extend(_parse_rating_rows(page_html, cat_id))
+            except Exception:
+                continue
+
+    return all_rows
+
+
 def _fetch_all_ratings() -> list[dict[str, Any]]:
-    """Загрузить рейтинги со всех категорий raexpert.ru (с кэшем 4 ч)."""
+    """Загрузить рейтинги со всех категорий raexpert.ru (параллельно, с кэшем 4 ч)."""
     global _cache_all
     now = time.monotonic()
     if _cache_all is not None:
@@ -185,20 +224,60 @@ def _fetch_all_ratings() -> list[dict[str, Any]]:
             return data
 
     all_ratings: list[dict[str, Any]] = []
-    for cat_id in _CATEGORIES:
-        try:
-            html = _fetch_page(f"/ratings/{cat_id}/")
-            rows = _parse_rating_rows(html, cat_id)
-            all_ratings.extend(rows)
-        except Exception:
-            continue  # пропускаем категории с ошибками
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_fetch_category_ratings, cid): cid for cid in _CATEGORIES}
+        for fut in as_completed(futures):
+            try:
+                all_ratings.extend(fut.result())
+            except Exception:
+                continue
 
     _cache_all = (now, all_ratings)
     return all_ratings
 
 
+def _token_match(query_upper: str, text_upper: str) -> bool:
+    """Все слова запроса встречаются в тексте (порядок не важен)."""
+    tokens = query_upper.split()
+    if len(tokens) <= 1:
+        return False
+    return all(tok in text_upper for tok in tokens)
+
+
+def _search_in(query_upper: str, r: dict) -> bool:
+    """Проверить совпадение записи рейтинга с запросом (подстрока, затем токены)."""
+    name_upper = r["name"].upper()
+    if query_upper in name_upper:
+        return True
+    if _token_match(query_upper, name_upper):
+        return True
+    # Для облигаций ищем также в названии эмитента
+    emitent = r.get("emitent")
+    if emitent:
+        emitent_upper = emitent.upper()
+        if query_upper in emitent_upper:
+            return True
+        if _token_match(query_upper, emitent_upper):
+            return True
+    # Для company slug
+    slug = r.get("company_slug")
+    if slug:
+        slug_upper = slug.upper()
+        if query_upper in slug_upper:
+            return True
+        if _token_match(query_upper, slug_upper):
+            return True
+    return False
+
+
 def rating_search(query: str) -> list[dict[str, Any]]:
-    """Поиск рейтинга по названию эмитента или облигации (подстрока, без учёта регистра).
+    """Поиск рейтинга по названию эмитента или облигации (без учёта регистра).
+
+    Ищет двумя способами:
+    1. Подстрока: весь запрос целиком в имени.
+    2. Токены: каждое слово запроса встречается в имени (порядок не важен).
+       Напр. "Балтийский лизинг" найдёт "ООО «Балтийский лизинг»".
 
     Вход: query — тикер/название эмитента ('Сбербанк', 'ЛУКОЙЛ', 'ГТЛК').
     Возврат: [{name, rating, outlook, date, category, type, agency}, ...].
@@ -212,19 +291,8 @@ def rating_search(query: str) -> list[dict[str, Any]]:
 
     matches: list[dict[str, Any]] = []
     for r in ratings:
-        name_upper = r["name"].upper()
-        # Прямое совпадение подстроки в имени
-        if q in name_upper:
+        if _search_in(q, r):
             matches.append(r)
-            continue
-        # Для облигаций ищем также в названии эмитента
-        if r.get("emitent") and q in r["emitent"].upper():
-            matches.append(r)
-            continue
-        # Для company slug
-        if r.get("company_slug") and q in r["company_slug"].upper():
-            matches.append(r)
-            continue
 
     # Дедупликация: один и тот же рейтинг + дата может быть для нескольких серий
     seen: set[tuple[str, str, str, str]] = set()

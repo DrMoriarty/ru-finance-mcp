@@ -609,6 +609,197 @@ def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dic
     }
 
 
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    mid = n // 2
+    return (s[mid] + s[mid - 1]) / 2 if n % 2 == 0 else s[mid]
+
+
+def liquidity(query: str, days: int = 90) -> dict:
+    """Единая оценка ликвидности бумаги: Amihud illiquidity, спред, оборот, скор 0-10.
+
+    Источники: дневные свечи (OHLCV) + текущий bid/ask через котировку.
+    Корень-история: moex.py — функция candles/_marketdata_row.
+    """
+    import math
+    from datetime import date, timedelta
+
+    till = date.today()
+    frm = till - timedelta(days=days + 10)
+    r = resolve(query)
+    raw = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows = records(raw, "candles")
+    if not rows:
+        return {"error": "нет данных", "secid": r["secid"]}
+
+    closes: list[float] = []
+    ruble_turnover: list[float] = []
+    lot_turnover: list[float] = []
+    zero_vol_days = 0
+    for row in rows:
+        c = row.get("close")
+        v = row.get("value") or 0
+        lo = row.get("volume") or 0
+        if c and c > 0:
+            closes.append(c)
+        ruble_turnover.append(v)
+        lot_turnover.append(lo)
+        if lo == 0:
+            zero_vol_days += 1
+
+    # Дневные лог-доходности
+    rets = [math.log(closes[i] / closes[i - 1])
+            for i in range(1, len(closes))
+            if closes[i - 1] > 0 and closes[i] > 0]
+
+    # Текущий bid/ask (реальный спред стакана)
+    try:
+        r_q = resolve(query)
+        md = _marketdata_row(r_q["secid"], r_q["engine"], r_q["market"], r_q["board"])
+        bid = md.get("BID")
+        ask = md.get("OFFER")
+    except Exception:  # noqa: BLE001
+        bid = ask = None
+
+    n_trading = len(rows)
+    last_close = closes[-1] if closes else 0
+
+    # 1) Средний суточный оборот, ₽ и лотов
+    avg_ruble = round(sum(ruble_turnover) / n_trading, 0) if n_trading else 0
+    avg_lots = round(sum(lot_turnover) / n_trading, 0) if n_trading else 0
+
+    # 2) Фактический календарный охват
+    first_date = rows[0].get("begin", "")
+    last_date = rows[-1].get("begin", "")
+    try:
+        from datetime import datetime as _dt
+        span = (_dt.fromisoformat(str(last_date)[:10]) -
+                _dt.fromisoformat(str(first_date)[:10])).days + 1
+    except Exception:  # noqa: BLE001
+        span = days
+    trading_day_ratio = round(n_trading / max(span, 1), 2)
+
+    # 3) Amihud illiquidity ratio (bps per 1M ₽ avg daily turnover)
+    #    = mean(|r_t|/V_t) × 10^6 × 10^4, V_t в рублях → bps на 1 млн₽
+    if rets:
+        pairs = list(zip(rets, ruble_turnover[1:]))
+        n_valid = max(1, len(pairs))
+        amihud_ratio = sum(abs(r) / v for r, v in pairs if v > 0) / n_valid
+        amihud_bps = round(amihud_ratio * 1e10, 2)
+    else:
+        amihud_bps = None
+
+    # 4) Спред — оценка из OHLC (модифицированный Corwin-Schultz) + реальный bid/ask
+    spread_estimates: list[dict] = []
+    if len(rows) >= 2:
+        betas = []
+        for i in range(1, len(rows)):
+            h0 = rows[i - 1].get("high") or 0
+            l0 = rows[i - 1].get("low") or 0
+            h1 = rows[i].get("high") or 0
+            l1 = rows[i].get("low") or 0
+            if h0 > 0 and l0 > 0 and h1 > 0 and l1 > 0:
+                g0 = math.log(h0 / l0)
+                g1 = math.log(h1 / l1)
+                betas.append((g0 * g1 + g0 * g0) / 2)
+        if betas:
+            beta_coef = sum(betas) / len(betas)
+            beta_coef = max(0.0, min(beta_coef, 3.0))
+            raw_spread = math.expm1(2 * beta_coef)
+            hl_spread_pct = max(0.0, raw_spread * 100)
+            if last_close > 0:
+                spread_estimates.append({
+                    "method": "hl_proxy",
+                    "spread_pct": round(hl_spread_pct, 3),
+                    "spread_rub": round(hl_spread_pct / 100 * last_close, 3),
+                })
+    if bid is not None and ask is not None:
+        mid = (bid + ask) / 2
+        if mid > 0:
+            ba_pct = round((ask - bid) / mid * 100, 3)
+            spread_estimates.append({
+                "method": "bid_ask",
+                "spread_pct": ba_pct,
+                "spread_rub": round(ask - bid, 3),
+            })
+
+    # Итоговый спред
+    if spread_estimates:
+        main_spread_pct = round(_median([s["spread_pct"] for s in spread_estimates]), 3)
+        main_spread_rub = round(_median([s["spread_rub"] for s in spread_estimates]), 3)
+    else:
+        main_spread_pct = None
+        main_spread_rub = None
+
+    # Композитный скор: turnover (weight 0.5) + Amihud (weight 0.5)
+    def _turnover_score(avg: float) -> float:
+        return max(0.0, min(10.0, math.log10(max(avg, 1)) / math.log10(1e10) * 10))
+
+    def _amihud_score(ah: float | None) -> float | None:
+        if ah is None or ah < 0.01:
+            return None
+        # ah = bps_per_mln₽. Скор: 0.01(liquid)→10, 1→9.7, 10→7.6, 100→3.2, 1000→0
+        # k4 = 10 / (log10(1000) − (−2)) ≈ 1.67 → монотонно от ah=0.01 до ah→∞
+        return max(0.0, min(10.0,
+            10 - (math.log10(max(ah, 0.01)) + 2) * 1.67))
+
+    metrics: list[tuple[float, str]] = []
+    metrics.append((_turnover_score(avg_ruble), "turnover"))
+    a_score = _amihud_score(amihud_bps)
+    if a_score is not None:
+        metrics.append((a_score, "amihud"))
+
+    if not metrics:
+        return {
+            "secid": r["secid"],
+            "error": "недостаточно данных для оценки",
+            "period_start": rows[0].get("begin", ""),
+            "period_end": rows[-1].get("begin", ""),
+            "trading_days": n_trading,
+            "avg_daily_turnover_rub": 0,
+            "avg_daily_volume_lots": 0,
+        }
+
+    score = round(sum(v for v, _ in metrics) / len(metrics), 1)
+    if score >= 8:
+        grade = "A (отличная)"
+    elif score >= 6:
+        grade = "B (хорошая)"
+    elif score >= 4:
+        grade = "C (умеренная)"
+    elif score >= 2:
+        grade = "D (низкая)"
+    else:
+        grade = "E (очень низкая)"
+
+    return {
+        "secid": r["secid"],
+        "period_start": rows[0].get("begin", ""),
+        "period_end": rows[-1].get("begin", ""),
+        "trading_days": n_trading,
+        "calendar_days": days,
+        "trading_day_ratio": trading_day_ratio,
+        "zero_volume_days": zero_vol_days,
+        "avg_daily_turnover_rub": avg_ruble,
+        "avg_daily_volume_lots": avg_lots,
+        "amihud_bps_per_mln": amihud_bps,
+        "spread": main_spread_pct,
+        "spread_rub": main_spread_rub,
+        "spread_sources": spread_estimates,
+        "composite_score": score,
+        "grade": grade,
+        "note": ("Amihud = mean(|r_t|/V_t) × 10^10 (bps per 1M₽). "
+                 "Спред: оценка из OHLC (Corwin-Schultz) + фактический bid/ask. "
+                 "Скор: 0-10 (выше = ликвиднее)."),
+    }
+
+
 def indicative_rates(frm: str | None = None,
                      till: str | None = None) -> list[dict]:
     """Индикативные курсы валют срочного рынка.

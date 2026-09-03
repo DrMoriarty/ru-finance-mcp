@@ -672,6 +672,21 @@ def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dic
     return moex.price_volatility(query, days, rf_annual)
 
 
+@mcp.tool()
+def liquidity_assessment(query: str, days: int = 90) -> dict:
+    """Оценка ликвидности бумаги: Amihud illiquidity, спред, оборот, скор 0-10.
+
+    Вход: query (тикер/ISIN), days (90 по умолчанию).
+    Возврат: {secid, avg_daily_turnover_rub, avg_daily_volume_lots, amihud_bps_per_mln,
+    spread (% и ₽), spread_sources (bid/ask + оценка из OHLC), composite_score (0-10),
+    grade (A-E), trading_day_ratio, zero_volume_days, ...}.
+    composite_score: A (≥8) = очень ликвидная, E (<2) = минимальная.
+    amihud_bps_per_mln = mean(|r_t|/V_t) × 10^10 (bps/млн₽), где V_t — рублёвый оборот.
+    Спред: оценка из OHLC (Corwin-Schultz) + фактический bid/ask стакана.
+    """
+    return moex.liquidity(query, days)
+
+
 # ─────────────────────────── Ожидания по ставке (G-кривая ОФЗ) ───────────────────────────
 @mcp.tool()
 def rate_expectations(key_rate: float | None = None) -> dict:
