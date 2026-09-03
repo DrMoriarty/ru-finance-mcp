@@ -6,7 +6,12 @@
 """
 from __future__ import annotations
 
-from .session import exec_template, first, get_moex, raw_get, records
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import requests as _requests
+
+from .session import ISS, exec_template, first, get_moex, raw_get, records
 
 # ID шаблонов ISS (определены интроспекцией aioboy/moex)
 T_SEARCH = 205   # /securities                                  (поиск)
@@ -357,16 +362,67 @@ def market_capitalization() -> dict:
     }
 
 
+_corr_cache: tuple[float, dict[str, list[dict]]] | None = None
+_CORR_TTL = 3600  # 1 hour
+
+
+def _fetch_correlations_page(start: int, retries: int = 4) -> list[dict]:
+    url = f"{ISS}/statistics/engines/stock/markets/shares/correlations.json"
+    params = {"iss.meta": "off", "limit": 1000, "start": start}
+    last: Exception | None = None
+    for i in range(retries):
+        try:
+            r = _requests.get(url, params=params, timeout=30)
+            r.raise_for_status()
+            b = r.json().get("coefficients") or {}
+            cols = b.get("columns") or []
+            return [dict(zip(cols, row)) for row in (b.get("data") or [])]
+        except Exception as e:  # noqa: BLE001
+            last = e
+            time.sleep(0.5 * (i + 1))
+    raise last  # type: ignore[misc]
+
+
+def _load_correlations() -> dict[str, list[dict]]:
+    """Fetch all correlations pages and group by SECID (with in-memory cache)."""
+    global _corr_cache
+    now = time.time()
+    if _corr_cache is not None and now - _corr_cache[0] < _CORR_TTL:
+        return _corr_cache[1]
+
+    # Fetch first page + cursor metadata
+    raw = raw_get("statistics/engines/stock/markets/shares/correlations",
+                  {"limit": 1000, "iss.meta": "off"})
+    cursor = (raw.get("coefficients.cursor") or {}).get("data") or [[0, 1000]]
+    total = cursor[0][1]
+    starts = list(range(1000, total, 1000))
+
+    first_rows = records(raw, "coefficients")
+    by_secid: dict[str, list[dict]] = {}
+    for r in first_rows:
+        key = (r.get("SECID") or "").upper()
+        by_secid.setdefault(key, []).append(r)
+
+    # Fetch remaining pages concurrently (8 workers is gentle enough for ISS)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_fetch_correlations_page, s): s for s in starts}
+        for f in as_completed(futs):
+            for r in f.result():
+                key = (r.get("SECID") or "").upper()
+                by_secid.setdefault(key, []).append(r)
+
+    _corr_cache = (time.time(), by_secid)
+    return by_secid
+
+
 def correlations(secid: str) -> list[dict]:
     """Коэффициенты корреляции и бета для бумаги.
 
     Вход: secid (напр. 'SBER'). Возвращает: [{secid, fxsecid, tradedate,
     coeff_correlation, coeff_beta}, ...] — все пары с другими бумагами.
     """
-    raw = raw_get("statistics/engines/stock/markets/shares/correlations",
-                  {"limit": 5000})
-    rows = records(raw, "coefficients")
-    return [r for r in rows if r.get("SECID") == secid.upper()]
+    by_secid = _load_correlations()
+    return by_secid.get(secid.upper(), [])
 
 
 def splits(secid: str | None = None) -> list[dict]:
