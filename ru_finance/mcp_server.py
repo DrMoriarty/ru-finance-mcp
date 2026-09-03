@@ -43,13 +43,10 @@ mcp = FastMCP(
 )
 
 
-# ─────────────────────────── Утилиты ───────────────────────────
+# ─────────────────────────── Utilities ───────────────────────────
 @mcp.tool()
 def current_datetime() -> dict:
-    """Текущая дата и время сервера (UTC+0, ISO 8601).
-    
-    Возвращает: {datetime, date, time, timestamp}.
-    """
+    """Server date and time (UTC+0, ISO 8601)."""
     now = datetime.now()
     return {
         "datetime": now.isoformat(),
@@ -59,51 +56,52 @@ def current_datetime() -> dict:
     }
 
 
-# ─────────────────────────── MOEX (Московская биржа) ───────────────────────────
+# ─────────────────────────── MOEX (Moscow Exchange) ───────────────────────────
 @mcp.tool()
 def moex_resolve(query: str) -> dict:
-    """Определить одну бумагу по тикеру/ISIN/названию.
+    """Lookup a single security by ticker/ISIN/name.
 
-    Вход: query — 'SBER', 'RU000A10C6F7', '26253', 'Сбербанк'.
-    Возврат: {secid, engine, market, board, type, shortname, isin, group, is_traded}.
-    Для списка бумаг (все облигации эмитента, все фонды) используй moex_search.
+    Args: query — 'SBER', 'RU000A10C6F7', '26253', 'Сбербанк'.
+    Returns: {secid, engine, market, board, type, shortname, isin, group, is_traded}.
+    For multiple matches use moex_search.
     """
     return moex.resolve(query)
 
 
 @mcp.tool()
 def moex_search(query: str, sec_type: str | None = None) -> list[dict]:
-    """Поиск торгуемых бумаг на MOEX по тикеру/ISIN/названию — возвращает массив.
+    """Search MOEX securities by ticker/ISIN/name.
 
-    Вход: query — 'Сбербанк', 'Тинькофф', 'SBER', 'RU000A10C6F7'.
-          sec_type — фильтр: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
-    Возврат: [{secid, shortname, isin, type, group, is_traded, engine, market, board}, ...].
-    Показывает только активно торгуемые бумаги (is_traded=1).
-    Примеры:
-      moex_search("Сбербанк")                → все торгуемые бумаги Сбербанка
-      moex_search("Сбербанк", sec_type="bond") → только торгуемые облигации
-      moex_search("Тинькофф", sec_type="fund") → только торгуемые фонды
+    Args: query — 'Сбербанк', 'Тинькофф', 'SBER', 'RU000A10C6F7'.
+          sec_type — optional filter: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
+    Returns [{secid, shortname, isin, type, group, is_traded, engine, market, board}].
+    Only actively traded (is_traded=1) securities are returned.
+    Examples:
+      moex_search("Сбербанк")                      → all Sberbank securities
+      moex_search("Сбербанк", sec_type="bond")      → only bonds
+      moex_search("Тинькофф", sec_type="fund")      → only funds
     """
     return moex.resolve(query, sec_type=sec_type, as_list=True, traded_only=True)
 
 
 @mcp.tool()
 def moex_quote(query: str) -> dict:
-    """Текущая котировка акции/фонда (нормализованная, цена с фоллбэками).
+    """Normalized quote for a share/fund with fallback pricing.
 
-    Вход: query — тикер/название. Возврат: {secid, price, change_pct, bid, ask,
-    open, low, high, value_today, vol_today, updatetime, price_field}.
-    В выходные LAST пуст → отдаётся MARKETPRICE/LCLOSEPRICE (см. price_field).
+    Args: query — ticker or name.
+    Returns: {secid, price, change_pct, bid, ask, open, low, high, value_today,
+    vol_today, updatetime, price_field}.
+    On weekends LAST is empty → falls back to MARKETPRICE/LCLOSEPRICE (see price_field).
     """
     return moex.quote(query)
 
 
 @mcp.tool()
 def moex_bond(query: str) -> dict:
-    """Облигация: цена %, YTM, дюрация (годы и модиф.), купон, погашение, НКД.
+    """Bond data: price %, YTM, duration (years & modified), coupon, maturity, accrued interest.
 
-    Вход: query — номер ОФЗ ('26253') или ISIN ('RU000A10C6F7').
-    Возврат: {price_pct, ytm, duration_years, mod_duration_years, coupon_pct,
+    Args: query — OFZ number ('26253') or ISIN ('RU000A10C6F7').
+    Returns: {price_pct, ytm, duration_years, mod_duration_years, coupon_pct,
     annual_coupon_per_bond, next_coupon, maturity, accrued_int, face_value, ...}.
     """
     return moex.bond(query)
@@ -111,42 +109,43 @@ def moex_bond(query: str) -> dict:
 
 @mcp.tool()
 def moex_bond_coupons(query: str) -> list[dict]:
-    """Расписание купонов облигации (история + будущие) из НРД/MOEX.
+    """Coupon schedule (past + future) from NSD/MOEX.
 
-    Вход: query — ISIN или номер ОФЗ. Возврат: [{coupondate, value, valueprc,
-    facevalue, faceunit, is_past, recorddate, startdate}, ...].
-    Для ОФЗ возвращает пустой список (данные ЦБ не в ISS). is_past=True — уже выплачен.
+    Args: query — ISIN or OFZ number.
+    Returns [{coupondate, value, valueprc, facevalue, faceunit, is_past, recorddate, startdate}].
+    Returns empty list for OFZ (CBR data not in ISS). is_past=True → already paid.
     """
     return moex.bond_coupons(query)
 
 
 @mcp.tool()
 def moex_candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
-    """Свечи OHLCV за период. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
+    """OHLCV candles for a period.
 
-    Вход: query, frm/till ('YYYY-MM-DD'). Возврат: список {begin,open,high,low,close,value,volume}.
+    Args: query; interval: 1,10,60(hour),24(day),7(week),31(month),4(quarter).
+    frm/till ('YYYY-MM-DD').
+    Returns [{begin, open, high, low, close, value, volume}].
     """
     return moex.candles(query, frm, till, interval)
 
 
 @mcp.tool()
 def moex_history(query: str, frm: str, till: str) -> list[dict]:
-    """Дневная история торгов (close/volume/value...) за интервал дат.
+    """Daily trading history for a date range.
 
-    Вход: query, frm/till ('YYYY-MM-DD'). Для доходностей/волатильности/просадок.
-    Возвращает: list[dict] с полями TRADEDATE, CLOSE, VOLUME, VALUE и др. Одна строка = один торговый день.
-    ВНИМАНИЕ: не вызывай с большим диапазоном дат (более 1 года) — вернётся слишком много строк,
-    что приведёт к переполнению контекста агента. Лучше брать минимально необходимый интервал.
+    Args: query; frm/till ('YYYY-MM-DD').
+    Returns [{TRADEDATE, CLOSE, VOLUME, VALUE, ...}] — one row per trading day.
+    WARNING: avoid large date ranges (>1 year) — too many rows flood the agent context.
     """
     return moex.history(query, frm, till)
 
 
 @mcp.tool()
 def moex_search_endpoints(pattern: str) -> list[dict]:
-    """Найти ISS-эндпоинты по подстроке пути (для доступа к данным без готовой ручки).
+    """Find ISS endpoints by path substring (for raw data access).
 
-    Вход: pattern — напр. '/candles', '/dividends', 'turnovers'.
-    Возврат: [{id, path, variables}]. id → потом в moex_query.
+    Args: pattern — e.g. '/candles', '/dividends', 'turnovers'.
+    Returns [{id, path, variables}]. Use id in moex_query.
     """
     return moex.search_endpoints(pattern)
 
@@ -154,124 +153,126 @@ def moex_search_endpoints(pattern: str) -> list[dict]:
 @mcp.tool()
 def moex_query(template_id: int, path_vars: dict | None = None,
                query_params: dict | None = None) -> dict:
-    """Generic-доступ к ЛЮБОМУ из ~252 эндпоинтов ISS по template_id.
+    """Generic access to any ISS endpoint by template_id.
 
-    Вход: template_id (из moex_search_endpoints), path_vars — переменные пути
-    (engine/market/board/security...), query_params — query-параметры (from/till/...).
-    Возврат: {block: [строки]}. Запасной путь, когда нет именованной ручки.
+    Args: template_id (from moex_search_endpoints); path_vars — (engine/market/board/security...);
+    query_params — (from/till/...).
+    Returns: {block: [rows]}. Fallback when no named tool exists.
     """
     return moex.query(template_id, path_vars, query_params)
 
 
-# ───────────────────── MOEX: корпоративная информация (CCI/НРД) ─────────────────────
+# ───────────────────── MOEX: corporate info (CCI/NSD) ─────────────────────
 @mcp.tool()
 def moex_company_info(query: str) -> dict:
-    """Справка об организации по ИНН/ОГРН/названию.
+    """Company lookup by INN/OGRN/name.
 
-    Вход: query — ИНН, ОГРН, тикер или фрагмент названия.
-    Возврат: {companies: [{basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid}]}.
-    Дубликаты по emitent_id убираются; максимальный результат — 20 компаний.
+    Args: query — INN, OGRN, ticker or company name fragment.
+    Returns: {companies: [{basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid}]}.
+    Deduplicates by emitent_id; max 20 results.
     """
     return moex.company_info(query)
 
 
 @mcp.tool()
 def moex_company_info_by_id(company_id: int) -> dict:
-    """Справка об организации по внутреннему ID MOEX (basis_company_id).
+    """Company lookup by internal MOEX ID (basis_company_id).
 
-    Вход: company_id — числовой ID (узнаётся из moex_company_info).
-    Возврат: {basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid, ...} или {}.
+    Args: company_id — numeric ID (from moex_company_info).
+    Returns: {basis_company_id, inn, name_short_ru, name_full_ru, okpo, secid, ...} or {}.
     """
     return moex.company_info_by_id(company_id)
 
 
 @mcp.tool()
 def moex_ir_calendar(limit: int = 50) -> list[dict]:
-    """Календарь IR-мероприятий (даты отчётов публичных компаний).
+    """IR events calendar (earnings dates for public companies).
 
-    Вход: limit (по умолч. 50). Возврат: [{company_name, event_type, event_date, ...}].
+    Args: limit (default 50).
+    Returns: [{company_name, event_type, event_date, ...}].
     """
     return moex.ir_calendar(limit)
 
 
-# ───────────────────── MOEX: статистика рынка ─────────────────────
+# ───────────────────── MOEX: market stats ─────────────────────
 @mcp.tool()
 def moex_market_capitalization() -> dict:
-    """Капитализация фондового рынка (₽).
+    """Stock market capitalization (₽).
 
-    Возврат: {capitalization, issuecapitalization, tradedate, updatetime}.
+    Returns: {capitalization, issuecapitalization, tradedate, updatetime}.
     """
     return moex.market_capitalization()
 
 
 @mcp.tool()
 def moex_correlations(secid: str) -> list[dict]:
-    """Коэффициенты корреляции и бета для бумаги.
+    """Correlation coefficients and beta for a security.
 
-    Вход: secid (тикер, напр. 'SBER').
-    Возврат: [{secid, fxsecid, tradedate, coeff_correlation, coeff_beta}].
+    Args: secid — ticker, e.g. 'SBER'.
+    Returns [{secid, fxsecid, tradedate, coeff_correlation, coeff_beta}].
     """
     return moex.correlations(secid)
 
 
 @mcp.tool()
 def moex_splits(secid: str | None = None) -> list[dict]:
-    """Справочник дроблений и консолидаций бумаг.
+    """Splits and reverse-splits reference.
 
-    Вход: secid (опционально). Без параметра — все сплиты.
-    Возврат: [{tradedate, secid, before, after}].
+    Args: secid (optional). Without arg — all splits.
+    Returns [{tradedate, secid, before, after}].
     """
     return moex.splits(secid)
 
 
-# ───────────────────── MOEX: рынок облигаций ─────────────────────
+# ───────────────────── MOEX: bond market ─────────────────────
 @mcp.tool()
 def moex_bond_market_aggregates(frm: str | None = None,
                                 till: str | None = None) -> list[dict]:
-    """Агрегированные показатели рынка облигаций.
+    """Aggregated bond market indicators.
 
-    Вход: frm/till ('YYYY-MM-DD', опционально).
-    Возврат: [{tradedate, type_bond, iss_nominal, vol_nominal, avg_years, ...}].
+    Args: frm/till ('YYYY-MM-DD', optional).
+    Returns [{tradedate, type_bond, iss_nominal, vol_nominal, avg_years, ...}].
     """
     return moex.bond_market_aggregates(frm, till)
 
 
 @mcp.tool()
 def moex_zcyc_history(frm: str, till: str) -> list[dict]:
-    """История параметров КБД (Кривая Бескупонной Доходности).
+    """ZCYC (Zero-Coupon Yield Curve) parameters history.
 
-    Вход: frm/till ('YYYY-MM-DD'). Возврат: [{tradedate, b1,b2,b3, t1, g1..g9}].
-    Параметры НСС-модели для каждого дня — для бэктестинга кривой.
+    Args: frm/till ('YYYY-MM-DD').
+    Returns [{tradedate, b1,b2,b3, t1, g1..g9}] — NSS model params for backtesting.
     """
     return moex.zcyc_history(frm, till)
 
 
-# ───────────────────── MOEX: активность и курсы ─────────────────────
+# ───────────────────── MOEX: activity and rates ─────────────────────
 @mcp.tool()
 def moex_turnovers() -> list[dict]:
-    """Сводные обороты по рынкам (биржевые итоги).
+    """Aggregated trading volumes by market (exchange summary).
 
-    Возврат: [{name, valtoday, valtoday_usd, numtrades, updatetime, title}].
-    Рынки: stock, currency, futures, commodity, ...
+    Returns [{name, valtoday, valtoday_usd, numtrades, updatetime, title}].
+    Markets: stock, currency, futures, commodity, etc.
     """
     return moex.turnovers()
 
 
 @mcp.tool()
 def moex_sitenews(limit: int = 20) -> list[dict]:
-    """Новости Московской биржи.
+    """Moscow Exchange news feed.
 
-    Вход: limit (по умолч. 20). Возврат: [{id, tag, title, published_at}].
+    Args: limit (default 20).
+    Returns [{id, tag, title, published_at}].
     """
     return moex.sitenews(limit)
 
 
 @mcp.tool()
 def moex_aggregates(query: str, date: str) -> dict:
-    """Агрегированные итоги торгов за дату по бумаге.
+    """Daily trading summary for a security.
 
-    Вход: query (тикер), date ('YYYY-MM-DD').
-    Возврат: {securities: [...], marketdata: [...]} — полные итоги дня.
+    Args: query (ticker), date ('YYYY-MM-DD').
+    Returns: {securities: [...], marketdata: [...]}.
     """
     return moex.aggregates(query, date)
 
@@ -279,22 +280,21 @@ def moex_aggregates(query: str, date: str) -> dict:
 @mcp.tool()
 def moex_indicative_rates(frm: str | None = None,
                           till: str | None = None) -> list[dict]:
-    """Индикативные курсы валют срочного рынка.
+    """Indicative FX rates from derivatives market.
 
-    Вход: frm/till ('YYYY-MM-DD', опционально).
-    Возврат: [{tradedate, tradetime, secid, rate, clearing}].
+    Args: frm/till ('YYYY-MM-DD', optional).
+    Returns [{tradedate, tradetime, secid, rate, clearing}].
     """
     return moex.indicative_rates(frm, till)
 
 
-# ───────────────────── Срочный рынок (фьючерсы / опционы) ─────────────────────
+# ───────────────────── Derivatives (futures / options) ─────────────────────
 @mcp.tool()
 def moex_futures_list(asset_code: str | None = None) -> list[dict]:
-    """Каталог фьючерсных контрактов FORTS с рыночными данными и спецификацией.
+    """FORTS futures contracts catalog with market data and spec.
 
-    Вход: asset_code — код базисного актива (напр. 'Si', 'RTS', 'BR', 'GAZR').
-          Без параметра — все торгуемые контракты.
-    Возврат: [{secid, name, asset_code, expiry_date, lot_volume, min_step,
+    Args: asset_code — underlying (e.g. 'Si', 'RTS', 'BR', 'GAZR'). None → all traded.
+    Returns [{secid, name, asset_code, expiry_date, lot_volume, min_step,
     step_price, initial_margin, last_settle_price, open_interest, oichange,
     bid, offer, last, high, low, volume_today, value_today, ...}].
     """
@@ -303,43 +303,42 @@ def moex_futures_list(asset_code: str | None = None) -> list[dict]:
 
 @mcp.tool()
 def moex_futures_open_interest(asset: str) -> dict:
-    """Открытый интерес по базисному активу: разбивка на юрлица / физлица.
+    """Open interest breakdown by legal/physical persons.
 
-    Вход: asset — код базисного актива ('Si', 'RTS', 'BR', 'SBRF'...).
-    Возврат: {asset, tradedate, juridical: {oi_long, oi_short, oi_change_...},
+    Args: asset — underlying code ('Si', 'RTS', 'BR', 'SBRF', ...).
+    Returns: {asset, tradedate, juridical: {oi_long, oi_short, oi_change_...},
     physical: {...}, total_oi_long, total_oi_short}.
-    Показывает, кто (непрофессионалы vs профессионалы) наращивает/сокращает позиции.
+    Shows who (retail vs professional) is building/reducing positions.
     """
     return moex.futures_open_interest(asset)
 
 
 @mcp.tool()
 def moex_futures_series(asset: str | None = None) -> list[dict]:
-    """Календарь экспираций фьючерсов — контракты с датами погашения.
+    """Futures expiration calendar — contracts with settlement dates.
 
-    Вход: asset — код базисного ('Si', 'RTS'...), опционально.
-    Без параметра — все серии (до 500).
-    Возврат: [{secid, name, start_date, expiration_date, asset_code,
+    Args: asset — underlying code ('Si', 'RTS', ...), optional. None → all series (up to 500).
+    Returns [{secid, name, start_date, expiration_date, asset_code,
     underlying_asset, is_traded, is_expired, days_to_expiry}].
-    days_to_expiry — дней до экспирации (< 0 — уже истёк).
+    days_to_expiry: < 0 → already expired.
     """
     return moex.futures_series(asset)
 
 
 @mcp.tool()
 def moex_futures_promo() -> dict:
-    """Агрегированная статистика срочного рынка (FORTS): объём комиссий.
+    """FORTS aggregated fee statistics.
 
-    Возврат: {fee_forts, fee_options, fee_all, updated_at}.
+    Returns: {fee_forts, fee_options, fee_all, updated_at}.
     """
     return moex.futures_promo()
 
 
 @mcp.tool()
 def moex_options_assets() -> list[dict]:
-    """Базисные активы опционов FORTS с рыночными данными.
+    """FORTS options underlying assets with market data.
 
-    Возврат: [{tradedate, asset, asset_name, asset_type, asset_last_price,
+    Returns [{tradedate, asset, asset_name, asset_type, asset_last_price,
     asset_last_to_prev, asset_high, asset_low, val_today, vol_today, num_trades,
     open_position, oichange, option_secid}].
     """
@@ -348,42 +347,37 @@ def moex_options_assets() -> list[dict]:
 
 @mcp.tool()
 def moex_options_board(asset: str) -> dict:
-    """Опционная доска (волатильность, страйки, OI) по базисному активу.
+    """Option board (volatility, strikes, OI) for underlying.
 
-    Вход: asset — код базисного ('Si', 'RTS', 'SBRF', 'GAZR'...).
-    Возврат: {asset_info: {central_strike, underlying_settle, last_del_date},
+    Args: asset — underlying code ('Si', 'RTS', 'SBRF', 'GAZR', ...).
+    Returns: {asset_info: {central_strike, underlying_settle, last_del_date},
     calls: [{secid, strike, iv, last, theor_price, bid, offer, oi, volume}],
-    puts: [同上]}.
-    Для оценки волатильности опционов и принятия решений по хеджам.
+    puts: [same]}.
     """
     return moex.options_board(asset)
 
 
 @mcp.tool()
 def moex_option_quote(secid: str) -> dict:
-    """Котировка конкретного опционного инструмента.
+    """Single option instrument quote.
 
-    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
-    Возврат: {secid, shortname, strike, option_type,
+    Args: secid — instrument code ('Si87000BI6A', 'GZ85CU6A', ...).
+    Returns: {secid, shortname, strike, option_type,
     underlying_asset, underlying_settle, expiration_date, last_trade_date,
     last, bid, offer, spread, oi, volume, settle_price, ...,
-    ГО: im_np, im_sp, im_buy}.
-    Для детального анализа конкретного опциона: премия, спред bid/offer,
-    гарантийное обеспечение.
+    margin: im_np, im_sp, im_buy}.
     """
     return moex.option_quote(secid)
 
 
 @mcp.tool()
 def moex_option_orderbook(secid: str) -> dict:
-    """Лучшие bid/offer стакана опционного инструмента.
+    """Best bid/offer for an option instrument.
 
-    Полный стакан (depth-of-market) для опционов недоступен через ISS REST
-    (эндпоинт /orderbook отдаёт HTML). Возвращаем лучшие bid/offer и спред.
+    Note: full depth-of-market unavailable via ISS REST (endpoint returns HTML). Returns best bid/offer and spread.
 
-    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...).
-    Возврат: {secid, bid, offer, spread, bid_depth, offer_depth}.
-    Для оценки ликвидности опционов.
+    Args: secid — instrument code ('Si87000BI6A', 'GZ85CU6A', ...).
+    Returns: {secid, bid, offer, spread, bid_depth, offer_depth}.
     """
     return moex.option_orderbook(secid)
 
@@ -391,88 +385,79 @@ def moex_option_orderbook(secid: str) -> dict:
 @mcp.tool()
 def moex_option_history(secid: str, frm: str | None = None,
                         till: str | None = None) -> list[dict]:
-    """История сделок опционного инструмента.
+    """Option trade history.
 
-    Вход: secid — код инструмента ('Si87000BI6A', 'GZ85CU6A'...);
-    frm/till — даты 'YYYY-MM-DD' (опционально).
-    Возврат: [{tradedate, close, open, high, low, volume, value,
+    Args: secid — instrument code ('Si87000BI6A', 'GZ85CU6A', ...);
+    frm/till — 'YYYY-MM-DD' (optional).
+    Returns [{tradedate, close, open, high, low, volume, value,
     oi, oi_value, settle_price, waprice, num_trades, theor_price, change, qty}].
-    Для анализа динамики премии и OI опционов.
     """
     return moex.option_history(secid, frm, till)
 
 
-# ─────────────────────────── Дивиденды (smart-lab.ru) ───────────────────────────
+# ─────────────────────────── Dividends (smart-lab.ru) ───────────────────────────
 @mcp.tool()
 def smartlab_dividends(limit: int = 50) -> list[dict]:
-    """Календарь ближайших дивидендов со smart-lab.ru (данные, не ISS).
+    """Upcoming dividends calendar from smart-lab.ru.
 
-    Возврат: {name, ticker, period,
-    dividend_rub, yield_pct, board_approved, last_buy_date, close_date,
-    payment_date, price}. dividend_rub — ₽ за акцию; yield_pct — див. доходность %.
+    Returns [{name, ticker, period, dividend_rub, yield_pct, board_approved,
+    last_buy_date, close_date, payment_date, price}].
+    dividend_rub — ₽ per share; yield_pct — dividend yield %.
     """
     return smartlab.get_upcoming_dividends(limit)
 
 
 @mcp.tool()
 def smartlab_dividend_history(ticker: str) -> list[dict]:
-    """История дивидендов по тикеру со smart-lab.ru (данные, не ISS).
+    """Dividend history by ticker from smart-lab.ru.
 
-    Вход: ticker — тикер («SBER», «LKOH»). Возврат: список {name, ticker, period,
-    dividend_rub, yield_pct, board_approved, last_buy_date, close_date,
-    payment_date, price} для этого эмитента.
+    Args: ticker — e.g. 'SBER', 'LKOH'.
+    Returns [{name, ticker, period, dividend_rub, yield_pct, board_approved,
+    last_buy_date, close_date, payment_date, price}].
     """
     return smartlab.get_dividend_history(ticker)
 
 
-# ─────────────────────────── Кредитные рейтинги (raexpert.ru) ───────────────────────────
+# ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
 @mcp.tool()
 def raexpert_rating(query: str) -> list[dict]:
-    """Кредитный рейтинг эмитента или облигации от Эксперт РА.
+    """Credit rating of issuer or bond from Expert RA.
 
-    Источник — raexpert.ru (рейтинги обновляются несколько раз в неделю).
-    Данные из серверных HTML-таблиц категории рейтингов (20 последних
-    рейтинговых действий по 10 категориям: банки, нефинансовые компании,
-    облигации, страховщики, НПФ, лизинг и др.).
+    Source: raexpert.ru (updated several times a week, 4h cache).
+    Returns [{name, rating, outlook, date, category, type, agency}].
+    For bonds (type='emission') also {emitent}. Empty list if not found.
 
-    Вход: query — название эмитента ('Сбербанк', 'ЛУКОЙЛ') или облигации
-          ('ГТЛК', 'Атомэнергопром'). Регистр не важен.
-    Возврат: [{name, rating, outlook, date, category, type, agency}].
-    Для облигаций (type='emission') также {emitent}. Пустой список, если
-    рейтинг не найден в текущей выборке.
+    Rating scale: ruAAA (max) → ruCCC, ruD (default), revoked.
+    Outlook: Стабильный, Позитивный, Развивающийся.
+    Note: ruBBB− and above = investment grade. ruBB+ and below = speculative.
 
-    Рейтинг: ruAAA (максимум) → ruCCC, ruD (дефолт), отозван. Прогноз:
-    Стабильный, Позитивный, Развивающийся. Кэш 4 ч.
-
-    ПРИМЕЧАНИЕ: ruBBB− и выше — investment grade. ruBB+ и ниже — speculative.
+    Args: query — issuer or bond name ('Сбербанк', 'ЛУКОЙЛ', 'ГТЛК', 'Атомэнергопром'). Case-insensitive.
     """
     return raexpert.rating_search(query)
 
 
-# ─────────────────────────── ЗПИФ выплаты (vsezpif.ru) ───────────────────────────
+# ─────────────────────────── ZPIF payments (vsezpif.ru) ───────────────────────────
 @mcp.tool()
 def zpif_payments(
     fund_name: str | None = None,
     isin: str | None = None,
     limit: int = 50,
 ) -> dict:
-    """Календарь выплат ЗПИФ недвижимости с vsezpif.ru.
+    """Payment calendar for real-estate closed-end funds (ЗПИФ) from vsezpif.ru.
 
-    Источник — единственный бесплатный агрегатор данных по 40+ фондам недвижимости.
-    Оценка следующей выплаты на основе календаря на 12 месяцев вперед.
+    Only free aggregator for 40+ RE funds. Estimated next payment based on 12-month calendar.
 
-    Вход (опционально):
-      - fund_name — название фонда (или часть): 'Акцент', 'Парус', 'СФН', 'ВИМ';
-      - isin — международный идентификатор;
-      - limit — макс. количество записей (default 50).
+    Args (all optional):
+      - fund_name — name fragment: 'Акцент', 'Парус', 'СФН', 'ВИМ';
+      - isin — international ID;
+      - limit — max records (default 50).
 
-    Без параметров — все ближайшие выплаты на 12 месяцев.
+    Without args — all upcoming payments for 12 months.
 
-    Возврат:
-      - payments[]: {date, date_iso, fund_name, amount_per_unit};
-      - next_payment: {date_iso, fund_name, amount};
-      - funds_total: общее число фондов в календаре;
-      - cache_until: срок действия кэша (4 часа).
+    Returns:
+      {payments: [{date, date_iso, fund_name, amount_per_unit}],
+       next_payment: {date_iso, fund_name, amount},
+       funds_total: int}.
     """
     if fund_name or isin:
         payments = vsezpif.get_payments_by_fund(
@@ -488,7 +473,6 @@ def zpif_payments(
         payments = vsezpif.get_payment_calendar(limit=limit)
         next_pay = payments[0] if payments else None
 
-    # Получить список всех фондов
     all_funds = vsezpif.list_funds()
 
     return {
@@ -500,21 +484,21 @@ def zpif_payments(
 
 @mcp.tool()
 def zpif_funds_list() -> list[dict]:
-    """Список ЗПИФ недвижимости с vsezpif.ru.
+    """List of ЗПИФ funds from vsezpif.ru.
 
-    Возвращает словари: {slug, fund_name, url}.
-    slug можно использовать в zpif_payments для поиска по slug.
+    Returns [{slug, fund_name, url}]. Use slug in zpif_payments.
     """
     return vsezpif.list_funds()
 
 
-# ─────────────────────────── ЦБ РФ (cbrapi) ───────────────────────────
+# ─────────────────────────── CBR (Central Bank of Russia) ───────────────────────────
 @mcp.tool()
 def cbr_key_rate(first_date: str | None = None, last_date: str | None = None,
                  tail: int = 30) -> dict:
-    """Ключевая ставка ЦБ РФ (главный драйвер облигаций и рубля).
+    """CBR key rate — main driver for bonds and RUB.
 
-    Даты опциональны ('YYYY-MM-DD'). Возврат: {latest, latest_date, series[]}.
+    Args: first_date/last_date ('YYYY-MM-DD', optional).
+    Returns: {latest, latest_date, series[]}.
     """
     return cbr.key_rate(first_date, last_date, tail)
 
@@ -522,16 +506,16 @@ def cbr_key_rate(first_date: str | None = None, last_date: str | None = None,
 @mcp.tool()
 def cbr_ruonia(first_date: str | None = None, last_date: str | None = None,
                tail: int = 30) -> dict:
-    """RUONIA overnight (% годовых) — ставка денежного рынка, рыночный ориентир ставки."""
+    """RUONIA overnight (% annualized) — money market rate, market rate benchmark."""
     return cbr.ruonia(first_date, last_date, tail)
 
 
 @mcp.tool()
 def cbr_ruonia_index(first_date: str | None = None, last_date: str | None = None,
                      tail: int = 12) -> dict:
-    """RUONIA-индекс + срочные средние (1м/3м/6м, % годовых) — короткая кривая ставок.
+    """RUONIA index + term averages (1m/3m/6m, % annualized) — short end of curve.
 
-    Живая замена прекращённому ROISfix. AVG_* — проценты; RUONIA_INDEX — уровень индекса.
+    Replacement for discontinued ROISfix. AVG_* — %; RUONIA_INDEX — index level.
     """
     return cbr.ruonia_index(first_date, last_date, tail)
 
@@ -539,80 +523,76 @@ def cbr_ruonia_index(first_date: str | None = None, last_date: str | None = None
 @mcp.tool()
 def cbr_ibor(first_date: str | None = None, last_date: str | None = None,
              tail: int = 12) -> dict:
-    """MIACR — фактические средневзвешенные ставки межбанка (MosPrime/MIBOR прекращены, пустые колонки убраны)."""
+    """MIACR — actual weighted interbank rates (MosPrime/MIBOR discontinued)."""
     return cbr.ibor(first_date, last_date, tail)
 
 
 @mcp.tool()
 def cbr_currency(symbol: str, first_date: str, last_date: str, tail: int = 30) -> dict:
-    """Курс валюты ЦБ к рублю. symbol: 'USD','EUR','CNY'. Даты 'YYYY-MM-DD'."""
+    """CBR FX rate vs RUB. symbol: 'USD','EUR','CNY'. Dates 'YYYY-MM-DD'."""
     return cbr.currency(symbol, first_date, last_date, tail)
 
 
 @mcp.tool()
 def cbr_metals(first_date: str | None = None, last_date: str | None = None,
                tail: int = 12) -> dict:
-    """Учётные цены ЦБ на драгметаллы (золото/серебро/платина/палладий)."""
+    """CBR precious metals prices (gold/silver/platinum/palladium)."""
     return cbr.metals(first_date, last_date, tail)
 
 
 @mcp.tool()
 def cbr_reserves(first_date: str | None = None, last_date: str | None = None,
                  tail: int = 12) -> dict:
-    """Международные (золотовалютные) резервы РФ (ЗВР)."""
+    """Russia international reserves (gold + FX)."""
     return cbr.reserves(first_date, last_date, tail)
 
 
 @mcp.tool()
 def cbr_inflation(first_date: str | None = None, last_date: str | None = None,
                   tail: int = 24) -> dict:
-    """Инфляция (CPI, % г/г) и ключевая ставка ЦБ РФ (помесячно, с 2013 г.).
+    """CPI inflation (YoY %) and CBR key rate (monthly, from 2013).
 
-    Источник — cbr.ru/hd_base/infl/. Кэш 4 ч. Даты — 'YYYY-MM' или 'YYYY-MM-DD'.
-    Возврат: {latest_inflation, latest_key_rate, latest_inflation_target, latest_date,
+    Source: cbr.ru/hd_base/infl/. Cache: 4h.
+    Dates: 'YYYY-MM' or 'YYYY-MM-DD'.
+    Returns: {latest_inflation, latest_key_rate, latest_inflation_target, latest_date,
     series: [{date, key_rate, inflation_yoy, inflation_target}, ...]}.
-    inflation_yoy — годовая инфляция Росстат (% г/г). inflation_target — цель ЦБ РФ (%).
-    Для расчёта реальной доходности облигаций и портфеля.
+    inflation_yoy — Rosstat CPI (% YoY). inflation_target — CBR target (%).
+    For real yield calculations.
     """
     return cbr.inflation(first_date, last_date, tail)
 
 
-# ─────────────────────────── Облигационная математика ───────────────────────────
+# ─────────────────────────── Bond math ───────────────────────────
 @mcp.tool()
 def bond_report(query: str) -> dict:
-    """Глубокий разбор облигации: метрики + сценарии + спред к кривой + конвексность.
+    """Deep bond analysis: metrics + rate scenarios + spread to curve + convexity.
 
-    Вход: query — номер ОФЗ/ISIN. Возврат:
-    {bond, years_to_maturity, convexity, accrued_interest, gry, spread_to_curve,
-     scenarios, twist_scenarios, real_return}.
-    scenarios — полный доход за год при параллельном сдвиге ±п.п. + точка безубытка.
-    twist_scenarios — сценарии сужения/расширения кривой.
-    spread_to_curve — спред YTM к G-кривой на сопоставимой дюрации.
-    gry — gross redemption yield (YTM с учётом НКД).
-    real_return — реальная доходность: actual_inflation_pct + actual_real_return_pct
-    (фактический CPI Росстат) + scenarios (при разных допущениях).
+    Args: query — OFZ number/ISIN.
+    Returns: {bond, years_to_maturity, convexity, accrued_interest, gry, spread_to_curve,
+    scenarios, twist_scenarios, real_return}.
+    scenarios — total return for ±bp parallel shift + breakeven point.
+    twist_scenarios — curve steepening/flattening scenarios.
+    spread_to_curve — YTM spread to G-curve at matching duration.
+    gry — gross redemption yield (YTM + accrued).
+    real_return — yield vs CPI (Rosstat) + scenarios under different assumptions.
     """
     b = moex.bond(query)
     rep: dict = {"bond": b}
 
-    # Текущая инфляция (CPI) для расчёта реальной доходности
     try:
         infl_data = cbr.inflation(tail=1)
         actual_inflation = infl_data.get("latest_inflation")
     except Exception:  # noqa: BLE001
         actual_inflation = None
 
-    # Срок до погашения
     if b.get("maturity"):
         rep["years_to_maturity"] = bonds.years_to_maturity(b["maturity"])
 
-    # НКД
     if b.get("maturity") and b.get("coupon_pct") is not None:
         ai = bonds.accrued_interest(date.today(), b["maturity"],
                                      b["coupon_pct"], b.get("face_value") or 1000)
         rep["accrued_interest"] = ai
 
-    # Конвексность и GRY
     ytm = b.get("ytm")
     mat = b.get("maturity")
     c_pct = b.get("coupon_pct") or 0
@@ -627,13 +607,11 @@ def bond_report(query: str) -> dict:
                 date.today(), mat, c_pct, b["price_pct"],
                 b.get("face_value") or 1000)
 
-    # Twist-сценарии
     dur = b.get("duration_years")
     if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
             mat, c_pct, ytm, dur, today=str(date.today()))
 
-    # Спред к G-кривой (только если есть duration и ytm)
     if dur and ytm:
         try:
             cy = rate.curve_yield(dur)
@@ -647,25 +625,24 @@ def bond_report(query: str) -> dict:
 
 @mcp.tool()
 def bond_accrued_interest(query: str) -> dict:
-    """Накопленный купонный доход (НКД) облигации.
+    """Accrued coupon interest (НКД) for a bond.
 
-    Вход: query — номер ОФЗ/ISIN. Возврат: {accrued_rub, accrued_pct,
-    days_accrued, coupon_period_days, last_coupon, next_coupon}.
-    НКД считается из календаря купонных дат (freq=2, полугодовые).
+    Args: query — OFZ number/ISIN.
+    Returns: {accrued_rub, accrued_pct, days_accrued, coupon_period_days, last_coupon, next_coupon}.
     """
     b = moex.bond(query)
     if not b.get("maturity") or b.get("coupon_pct") is None:
-        return {"error": "недостаточно данных по облигации"}
+        return {"error": "insufficient bond data"}
     return bonds.accrued_interest(
         date.today(), b["maturity"], b["coupon_pct"], b.get("face_value") or 1000)
 
 
 @mcp.tool()
 def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dict:
-    """Волатильность, Sharpe ratio, max drawdown по дневным свечам.
+    """Volatility, Sharpe ratio, max drawdown from daily candles.
 
-    Вход: query (тикер), days (90 по умолчанию), rf_annual (безрисковая ставка, %
-    годовых). Возврат: {annual_vol_pct, daily_vol_pct, sharpe, max_drawdown_pct,
+    Args: query (ticker), days (default 90), rf_annual (risk-free rate, % annualized).
+    Returns: {annual_vol_pct, daily_vol_pct, sharpe, max_drawdown_pct,
     total_return_pct, high_price, low_price, trading_days, ...}.
     sharpe = (mean_excess_return / volatility) * sqrt(252).
     """
@@ -674,56 +651,56 @@ def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dic
 
 @mcp.tool()
 def liquidity_assessment(query: str, days: int = 90) -> dict:
-    """Оценка ликвидности бумаги: Amihud illiquidity, спред, оборот, скор 0-10.
+    """Liquidity assessment: Amihud illiquidity, spread, turnover, score 0-10.
 
-    Вход: query (тикер/ISIN), days (90 по умолчанию).
-    Возврат: {secid, avg_daily_turnover_rub, avg_daily_volume_lots, amihud_bps_per_mln,
-    spread (% и ₽), spread_sources (bid/ask + оценка из OHLC), composite_score (0-10),
+    Args: query (ticker/ISIN), days (default 90).
+    Returns: {secid, avg_daily_turnover_rub, avg_daily_volume_lots, amihud_bps_per_mln,
+    spread (% and RUB), spread_sources (bid/ask + OHLC estimate), composite_score (0-10),
     grade (A-E), trading_day_ratio, zero_volume_days, ...}.
-    composite_score: A (≥8) = очень ликвидная, E (<2) = минимальная.
-    amihud_bps_per_mln = mean(|r_t|/V_t) × 10^10 (bps/млн₽), где V_t — рублёвый оборот.
-    Спред: оценка из OHLC (Corwin-Schultz) + фактический bid/ask стакана.
+    A (≥8) = very liquid, E (<2) = minimal. amihud_bps_per_mln = mean(|r_t|/V_t) × 10^10.
+    Spread: Corwin-Schultz from OHLC + actual bid/ask.
     """
     return moex.liquidity(query, days)
 
 
-# ─────────────────────────── Ожидания по ставке (G-кривая ОФЗ) ───────────────────────────
+# ─────────────────────────── Rate expectations (OFZ G-curve) ───────────────────────────
 @mcp.tool()
 def rate_expectations(key_rate: float | None = None) -> dict:
-    """Рыночные ожидания по ключевой ставке из G-кривой ОФЗ (КБД). Только числа.
+    """Market rate expectations from OFZ G-curve. Numbers only.
 
-    key_rate опционален (иначе берётся из cbr_key_rate). Возврат: {as_of, key_rate,
-    ruonia, curve[], signals, note}. signals: наклон (slope_10y_1y/2y_3m), брутто-спреды
-    к ставке (включают срочную премию!), якорь short_vs_ruonia_1y, лесенка форвардов
-    (fwd_1y_in_1y/2y, fwd_3m_in_1y), inverted, машинная метка read
-    (cuts_priced|hikes_priced|flat). Интерпретацию под портфель делает клиент/агент.
+    Args: key_rate (optional, defaults to cbr_key_rate).
+    Returns: {as_of, key_rate, ruonia, curve[], signals, note}.
+    signals: slope (slope_10y_1y/2y_3m), gross spreads to key rate (include term premium!),
+    anchor short_vs_ruonia_1y, forward ladder (fwd_1y_in_1y/2y, fwd_3m_in_1y),
+    inverted, machine label read (cuts_priced|hikes_priced|flat).
+    Portfolio interpretation is done by the client/agent.
     """
     return rate.rate_expectations(key_rate)
 
 
 @mcp.tool()
 def curve_yield(years: float) -> dict:
-    """Доходность G-кривой ОФЗ на произвольном сроке (% годовых) — привязка к дюрации бумаги.
+    """G-curve OFZ yield at arbitrary maturity (% annualized) — for duration mapping.
 
-    Вход: years (напр. 5.9 под дюрацию ОФЗ 26253). Линейная интерполяция по узлам КБД.
+    Args: years (e.g. 5.9 for OFZ 26253 duration). Linear interpolation on ZCYC nodes.
     """
     return rate.curve_yield(years)
 
 
-# ─────────────────────────── Портфель (доменные отчёты) ───────────────────────────
+# ─────────────────────────── Portfolio (domain reports) ───────────────────────────
 @mcp.tool()
 def portfolio_snapshot(assets: str) -> dict:
-    """Снимок портфеля: стоимость, P&L, позиции, распределение, риск по ставке,
-    денежный поток, дивидендная доходность, реальная доходность.
+    """Portfolio snapshot: value, P&L, positions, allocation, rate risk,
+    income stream, dividend yield, real return.
 
-    Вход: assets — портфель в markdown (формат см. в описании portfolio-ручек/TOOLS.md):
-    строки '- Название (ТИКЕР/ISIN): N шт. (цена_покупки ...)'.
-    Тип бумаги (акция/облигация) определяется автоматически по ISIN/тикеру на MOEX.
-    Для облигаций цена покупки — в % номинала, для акций/фондов — в ₽.
-    Сервер generic: конкретные бумаги приходят ТОЛЬКО в этом параметре.
-    Позиции включают spread_to_curve_pp (спред к G-кривой) и div_yield_pct.
-    income_risk — реальная доходность портфеля (running_yield − CPI Росстат;
-    если CPI недоступна — ключевая ставка как приближение).
+    Args: assets — portfolio in markdown format (see TOOLS.md):
+    lines '- Name (TICKER/ISIN): N pcs. (purchase_price ...)'.
+    Type (share/bond) auto-detected by ISIN/ticker on MOEX.
+    Bonds: price in % of face; shares/funds: in RUB.
+    Server is generic: securities come ONLY in this parameter.
+    Positions include spread_to_curve_pp, div_yield_pct.
+    income_risk — real portfolio return (running_yield − Rosstat CPI;
+    if CPI unavailable — key rate as proxy).
     """
     try:
         infl_data = cbr.inflation(tail=1)
@@ -735,28 +712,28 @@ def portfolio_snapshot(assets: str) -> dict:
 
 @mcp.tool()
 def portfolio_rate_whatif(delta_pp: float, assets: str) -> dict:
-    """Что станет с портфелем при сдвиге доходностей облигаций на delta_pp п.п.
+    """Portfolio impact of delta_pp percentage point shift in bond yields.
 
-    Вход: delta_pp (напр. -1, +2); assets — портфель в markdown (как в portfolio_snapshot).
-    Возврат: изменение стоимости (₽ и %) + разбивка по бондам.
+    Args: delta_pp (e.g. -1, +2); assets — markdown portfolio (same as portfolio_snapshot).
+    Returns: value change (RUB and %) + bond-by-bond breakdown.
     """
     return portfolio.rate_whatif(delta_pp, assets)
 
 
 @mcp.tool()
 def portfolio_income_calendar(assets: str) -> dict:
-    """Ближайшие поступления: следующий купон по каждой облигации + объявленные дивиденды.
+    """Upcoming income: next coupon per bond + declared dividends.
 
-    Вход: assets — портфель в markdown (как в portfolio_snapshot).
+    Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
     return portfolio.income_calendar(assets)
 
 
 @mcp.tool()
 def portfolio_movers(assets: str) -> dict:
-    """Кто вырос/просел: дневное изменение и P&L против цены покупки (топ-3 в каждую сторону).
+    """Top gainers/losers: daily change and P&L vs purchase price (top-3 each way).
 
-    Вход: assets — портфель в markdown (как в portfolio_snapshot).
+    Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
     return portfolio.movers(assets)
 
