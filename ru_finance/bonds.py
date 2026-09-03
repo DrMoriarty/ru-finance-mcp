@@ -57,7 +57,8 @@ def macaulay_duration(valdate: date, maturity: date, coupon_rate: float,
 
 def rate_scenarios(maturity, coupon_rate: float, ytm: float,
                    horizon_days: int = 365, face: float = 1000.0,
-                   deltas=(-3, -2, -1, 0, 1, 2, 3), today: str | None = None) -> dict:
+                   deltas=(-3, -2, -1, 0, 1, 2, 3), today: str | None = None,
+                   freq: int = 2) -> dict:
     """Полный доход за горизонт при сдвиге доходности на delta п.п.
 
     Возвращает по каждому delta: total_return_pct = (цена_конца + купоны - цена_старта)/старт.
@@ -66,18 +67,18 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
     t0 = _to_date(today) if today else date.today()
     mat = _to_date(maturity)
     t1 = t0 + timedelta(days=horizon_days)
-    d0 = dirty_price(t0, mat, coupon_rate, ytm, face)
+    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq)
     annual_coupon = coupon_rate / 100 * face * (horizon_days / 365)
     out = []
     for dy in deltas:
-        d1 = dirty_price(t1, mat, coupon_rate, ytm + dy, face)
+        d1 = dirty_price(t1, mat, coupon_rate, ytm + dy, face, freq)
         tr = (d1 + annual_coupon - d0) / d0 * 100
         out.append({"delta_pp": dy, "total_return_pct": round(tr, 1)})
     # безубыток: какой рост доходности обнуляет годовой доход
     lo, hi = 0.0, 10.0
     for _ in range(40):
         mid = (lo + hi) / 2
-        tr = (dirty_price(t1, mat, coupon_rate, ytm + mid, face) + annual_coupon - d0) / d0
+        tr = (dirty_price(t1, mat, coupon_rate, ytm + mid, face, freq) + annual_coupon - d0) / d0
         if tr > 0:
             lo = mid
         else:
@@ -85,7 +86,7 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
     return {
         "ytm": ytm, "coupon_pct": coupon_rate, "maturity": str(mat),
         "horizon_days": horizon_days,
-        "macaulay_years": macaulay_duration(t0, mat, coupon_rate, ytm, face),
+        "macaulay_years": macaulay_duration(t0, mat, coupon_rate, ytm, face, freq),
         "scenarios": out,
         "breakeven_yield_rise_pp": round(lo, 2),
     }
@@ -229,7 +230,7 @@ def parallel_scenarios(valdate, maturity, coupon_rate, ytm, horizon_days=365,
 
 def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: float,
                     horizon_days: int = 365, face: float = 1000.0,
-                    today: str | None = None) -> list[dict]:
+                    today: str | None = None, freq: int = 2) -> list[dict]:
     """Сценарии «кривая twist»: сужение/расширение короткого/длинного конца.
 
     twist_short: короткий конец −2 п.п., длинный +1 п.п. (на каждый год дюрации)
@@ -242,7 +243,7 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
     t0 = _to_date(today) if today else date.today()
     mat = _to_date(maturity)
     t1 = t0 + timedelta(days=horizon_days)
-    d0 = dirty_price(t0, mat, coupon_rate, ytm, face)
+    d0 = dirty_price(t0, mat, coupon_rate, ytm, face, freq)
     annual_coupon = coupon_rate / 100 * face * (horizon_days / 365)
 
     dur = duration_years or 1.0
@@ -258,7 +259,7 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
         # Интерполяция: бумага с dur=0 двигается как короткий конец, dur>5 — как длинный
         weight_long = min(1.0, dur / 5.0)
         delta = tw["delta_short"] * (1 - weight_long) + tw["delta_long"] * weight_long
-        d1 = dirty_price(t1, mat, coupon_rate, ytm + delta, face)
+        d1 = dirty_price(t1, mat, coupon_rate, ytm + delta, face, freq)
         tr = (d1 + annual_coupon - d0) / d0 * 100
         out.append({
             "name": tw["name"],

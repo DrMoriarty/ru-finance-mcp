@@ -20,6 +20,17 @@ from mcp.types import Icon
 from . import bonds, cbr, moex, portfolio, raexpert, rate, smartlab, vsezpif
 
 
+def _freq_from_coupon_period(period_days: int | None) -> int:
+    """Частота купонов в год (1, 2, 4, 6, 12) из периода в днях."""
+    if not period_days or period_days <= 0:
+        return 2
+    _CANONICAL = {365: 1, 182: 2, 183: 2, 91: 4, 92: 4, 61: 6, 30: 12, 31: 12}
+    if period_days in _CANONICAL:
+        return _CANONICAL[period_days]
+    freq = round(365 / period_days)
+    return max(1, min(freq, 12))
+
+
 def _load_icons() -> list[Icon] | None:
     """Иконка сервера (PT Serif ₽, изумруд) как data-URI. Рендерят Inspector/VS Code/Desktop."""
     path = Path(__file__).parent / "icon.png"
@@ -578,6 +589,7 @@ def bond_report(query: str) -> dict:
     """
     b = moex.bond(query)
     rep: dict = {"bond": b}
+    freq = _freq_from_coupon_period(b.get("coupon_period_days"))
 
     try:
         infl_data = cbr.inflation(tail=1)
@@ -590,7 +602,8 @@ def bond_report(query: str) -> dict:
 
     if b.get("maturity") and b.get("coupon_pct") is not None:
         ai = bonds.accrued_interest(date.today(), b["maturity"],
-                                     b["coupon_pct"], b.get("face_value") or 1000)
+                                     b["coupon_pct"], b.get("face_value") or 1000,
+                                     freq)
         rep["accrued_interest"] = ai
 
     ytm = b.get("ytm")
@@ -598,19 +611,19 @@ def bond_report(query: str) -> dict:
     c_pct = b.get("coupon_pct") or 0
     if mat and ytm:
         rep["convexity"] = bonds.convexity(
-            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000)
+            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq)
         rep["scenarios"] = bonds.rate_scenarios(
-            mat, c_pct, ytm, today=str(date.today()))
+            mat, c_pct, ytm, today=str(date.today()), freq=freq)
         rep["real_return"] = bonds.real_return(ytm, actual_inflation=actual_inflation)
         if b.get("price_pct"):
             rep["gry"] = bonds.gry(
                 date.today(), mat, c_pct, b["price_pct"],
-                b.get("face_value") or 1000)
+                b.get("face_value") or 1000, freq)
 
     dur = b.get("duration_years")
     if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
-            mat, c_pct, ytm, dur, today=str(date.today()))
+            mat, c_pct, ytm, dur, today=str(date.today()), freq=freq)
 
     if dur and ytm:
         try:
@@ -633,8 +646,9 @@ def bond_accrued_interest(query: str) -> dict:
     b = moex.bond(query)
     if not b.get("maturity") or b.get("coupon_pct") is None:
         return {"error": "insufficient bond data"}
+    freq = _freq_from_coupon_period(b.get("coupon_period_days"))
     return bonds.accrued_interest(
-        date.today(), b["maturity"], b["coupon_pct"], b.get("face_value") or 1000)
+        date.today(), b["maturity"], b["coupon_pct"], b.get("face_value") or 1000, freq)
 
 
 @mcp.tool()
