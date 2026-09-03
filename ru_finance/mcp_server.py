@@ -17,7 +17,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
-from . import bonds, cbr, moex, portfolio, rate, smartlab, vsezpif
+from . import bonds, cbr, moex, portfolio, raexpert, rate, smartlab, vsezpif
 
 
 def _load_icons() -> list[Icon] | None:
@@ -420,6 +420,30 @@ def smartlab_dividend_history(ticker: str) -> list[dict]:
     payment_date, price} для этого эмитента.
     """
     return smartlab.get_dividend_history(ticker)
+
+
+# ─────────────────────────── Кредитные рейтинги (raexpert.ru) ───────────────────────────
+@mcp.tool()
+def raexpert_rating(query: str) -> list[dict]:
+    """Кредитный рейтинг эмитента или облигации от Эксперт РА.
+
+    Источник — raexpert.ru (рейтинги обновляются несколько раз в неделю).
+    Данные из серверных HTML-таблиц категории рейтингов (20 последних
+    рейтинговых действий по 10 категориям: банки, нефинансовые компании,
+    облигации, страховщики, НПФ, лизинг и др.).
+
+    Вход: query — название эмитента ('Сбербанк', 'ЛУКОЙЛ') или облигации
+          ('ГТЛК', 'Атомэнергопром'). Регистр не важен.
+    Возврат: [{name, rating, outlook, date, category, type, agency}].
+    Для облигаций (type='emission') также {emitent}. Пустой список, если
+    рейтинг не найден в текущей выборке.
+
+    Рейтинг: ruAAA (максимум) → ruCCC, ruD (дефолт), отозван. Прогноз:
+    Стабильный, Позитивный, Развивающийся. Кэш 4 ч.
+
+    ПРИМЕЧАНИЕ: ruBBB− и выше — investment grade. ruBB+ и ниже — speculative.
+    """
+    return raexpert.rating_search(query)
 
 
 # ─────────────────────────── ЗПИФ выплаты (vsezpif.ru) ───────────────────────────
