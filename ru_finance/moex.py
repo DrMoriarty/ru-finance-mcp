@@ -50,6 +50,24 @@ def resolve(query: str, sec_type: str | None = None,
     """
     limit = 200 if as_list else 50
     q = query.strip()
+    # Убираем слова-маркеры типа инструмента из запроса, если тип уже задан.
+    # Решает проблему, когда модель добавляет "облигации" к запросу "РСХБ".
+    if sec_type:
+        _type_words = {
+            "bond": {"облигации", "облигация", "бонд", "bond"},
+            "share": {"акции", "акция", "share", "stock"},
+            "stock": {"акции", "акция", "share", "stock"},
+            "fund": {"фонд", "фонды", "fund", "etf"},
+            "etf": {"фонд", "фонды", "fund", "etf"},
+            "index": {"индекс", "index"},
+        }
+        words_to_remove = _type_words.get(sec_type.lower(), set())
+        # Разбиваем на слова, убираем маркеры, собираем обратно
+        words = q.split()
+        filtered_words = [w for w in words if w.lower() not in words_to_remove]
+        new_q = " ".join(filtered_words).strip()
+        # Если после фильтрации запрос стал пустым, используем оригинал
+        q = new_q if new_q else q
     params: dict = {"q": q, "limit": limit}
     if traded_only:
         params["is_trading"] = 1
