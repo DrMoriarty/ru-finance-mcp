@@ -98,6 +98,8 @@ def resolve(query: str, sec_type: str | None = None,
             "type": r.get("type"),
             "group": r.get("group"),
             "is_traded": r.get("is_traded"),
+            "emitent_id": r.get("emitent_id"),
+            "emitent_title": r.get("emitent_title"),
         }
 
     # фильтр по типу (если задан)
@@ -197,6 +199,8 @@ def bond(query: str) -> dict:
     return {
         "secid": r["secid"], "shortname": r["shortname"], "isin": r["isin"],
         "board": r["board"], "type": r["type"],
+        "emitent_id": r.get("emitent_id"),
+        "emitent": r.get("emitent_title"),
         "price_pct": price,
         "change_pct": md.get("LASTCHANGEPRCNT"),
         "ytm": ytm,
