@@ -11,11 +11,13 @@
     ## Акции              ← класс (любой '## ...')
     - Сбербанк (SBER): 51 шт. (321,26 ₽ -> 301 ₽)
     ## Облигации
-    - ОФЗ 26249: 125 шт. (88,837 % -> 86,100 %)
-    - ГТЛК (RU000A10C6F7): 14 шт. (101,69 % -> 100,80 %)
+    - ОФЗ 26249: 125 шт. (88,837 -> 86,100)
+    - ГТЛК (RU000A10C6F7): 14 шт. (101,69 -> 100,80)
 
-Правила строки: «- Название [(ТИКЕР/ISIN)]: КОЛ-ВО шт. (ЦЕНА_ПОКУПКИ ... [-> тек.])».
-'%' в скобках → облигация (цена в % номинала), иначе акция/фонд (цена в ₽).
+Правила строки: «- Название [(ТИКЕР/ISIN)]: КОЛ-ВО шт. (ЦЕНА_ПОКУПКИ [-> тек.])».
+Тип бумаги (акция/облигация) определяется автоматически через резолв ISIN/тикера на MOEX.
+Для облигаций цена покупки — в % номинала, для акций/фондов — в ₽; сервер сам
+отличает одно от другого при обогащении.
 search_key (чем резолвим): тикер/ISIN из скобок > номер ОФЗ > само название.
 P&L приблизительный (средняя цена покупки, без купонов/дивидендов и налогов).
 """
@@ -59,7 +61,6 @@ def parse_assets(assets_text: str) -> list[dict]:
             prices = m.group("prices")
             nums = _NUM.findall(prices)
             buy = _num(nums[0]) if nums else None
-            is_bond = "%" in prices
             tk = _TICKER.search(name)
             base = _TICKER.sub("", name).strip()
             if tk:
@@ -71,7 +72,6 @@ def parse_assets(assets_text: str) -> list[dict]:
             out.append({
                 "account": account, "class": cls, "name": base,
                 "search_key": key, "qty": qty, "buy_price": buy,
-                "is_bond": is_bond,
             })
     return out
 
@@ -79,7 +79,7 @@ def parse_assets(assets_text: str) -> list[dict]:
 def _classify(pos: dict, info: dict) -> str:
     if _MM.search(pos["name"]):
         return "money_market"
-    if pos["is_bond"]:
+    if info["is_bond"]:
         secid = str(info.get("secid", ""))
         typ = str(info.get("type", ""))
         is_ofz = typ.startswith("ofz") or secid.startswith("SU")
@@ -102,7 +102,15 @@ _CLASS_RU = {
 def _enrich(pos: dict) -> dict:
     """Подтянуть живую цену и метрики для позиции."""
     p = dict(pos)
-    if pos["is_bond"]:
+    # Определяем тип бумаги: если group==stock_bonds → облигация, иначе фонд/акция.
+    is_bond = False
+    info = None
+    try:
+        info = moex.resolve(pos["search_key"])
+        is_bond = str(info.get("group", "")).endswith("_bonds")
+    except ValueError:
+        pass
+    if is_bond:
         b = moex.bond(pos["search_key"])
         face = b.get("face_value") or 1000
         price_pct = b.get("price_pct")
@@ -128,10 +136,10 @@ def _enrich(pos: dict) -> dict:
         q = moex.quote(pos["search_key"])
         price = q.get("price")
         p.update({
-            "secid": q["secid"], "shortname": q["shortname"], "type": None,
+            "secid": q["secid"], "shortname": q["shortname"],
+            "type": info.get("type") if info else None,
             "price": price, "unit": "₽", "change_pct": q.get("change_pct"),
         })
-        p["type"] = moex.resolve(pos["search_key"]).get("type")
         p["value"] = pos["qty"] * price if price else None
         p["cost"] = pos["qty"] * pos["buy_price"] if pos["buy_price"] else None
         # Дивидендная доходность
@@ -147,6 +155,7 @@ def _enrich(pos: dict) -> dict:
                         p["annual_dividend_per_position"] = round(pos["qty"] * last_div, 2)
             except Exception:  # noqa: BLE001
                 pass
+    p["is_bond"] = is_bond
     if p.get("value") and p.get("cost"):
         p["pnl"] = round(p["value"] - p["cost"], 2)
         p["pnl_pct"] = round(p["pnl"] / p["cost"] * 100, 2)
@@ -270,7 +279,13 @@ def income_calendar(assets_text: str) -> dict:
     """Ближайшие поступления: следующий купон по облигациям + объявленные дивиденды."""
     events = []
     for pos in parse_assets(assets_text):
-        if pos["is_bond"]:
+        pos_is_bond = False
+        try:
+            ri = moex.resolve(pos["search_key"])
+            pos_is_bond = str(ri.get("group", "")).endswith("_bonds")
+        except Exception:  # noqa: BLE001
+            pass
+        if pos_is_bond:
             b = moex.bond(pos["search_key"])
             if b.get("next_coupon") and b.get("coupon_value"):
                 events.append({
