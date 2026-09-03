@@ -622,6 +622,15 @@ def bond_report(query: str) -> dict:
     mat = b.get("maturity")
     c_pct = b.get("coupon_pct") or 0
     cs = coupon_schedule or None
+
+    if mat and ytm and b.get("price_pct"):
+        gry_result = bonds.gry(
+            date.today(), mat, c_pct, b["price_pct"],
+            b.get("face_value") or 1000, freq, coupon_schedule=cs)
+        rep["gry"] = gry_result
+        if cs and gry_result.get("gry_pct"):
+            ytm = gry_result["gry_pct"]
+
     if mat and ytm:
         rep["convexity"] = bonds.convexity(
             date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq,
@@ -630,12 +639,12 @@ def bond_report(query: str) -> dict:
             mat, c_pct, ytm, today=str(date.today()), freq=freq,
             coupon_schedule=cs)
         rep["real_return"] = bonds.real_return(ytm, actual_inflation=actual_inflation)
-        if b.get("price_pct"):
-            rep["gry"] = bonds.gry(
-                date.today(), mat, c_pct, b["price_pct"],
-                b.get("face_value") or 1000, freq, coupon_schedule=cs)
 
     dur = b.get("duration_years")
+    if cs and mat and ytm:
+        dur = bonds.macaulay_duration(
+            date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq,
+            coupon_schedule=cs)
     if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
             mat, c_pct, ytm, dur, today=str(date.today()), freq=freq,

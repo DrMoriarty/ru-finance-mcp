@@ -102,7 +102,7 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
         for s in coupon_schedule:
             d = _to_date(s["date"])
             if t0 < d <= t1:
-                total_coupon += s["rate_pct"] / 100 * face
+                total_coupon += s["rate_pct"] / 100 * face / freq
     else:
         total_coupon = coupon_rate / 100 * face * (horizon_days / 365)
 
@@ -111,8 +111,8 @@ def rate_scenarios(maturity, coupon_rate: float, ytm: float,
         d1 = dirty_price(t1, mat, coupon_rate, ytm + dy, face, freq, coupon_schedule)
         tr = (d1 + total_coupon - d0) / d0 * 100
         out.append({"delta_pp": dy, "total_return_pct": round(tr, 1)})
-    lo, hi = 0.0, 10.0
-    for _ in range(40):
+    lo, hi = 0.0, 100.0
+    for _ in range(60):
         mid = (lo + hi) / 2
         tr = (dirty_price(t1, mat, coupon_rate, ytm + mid, face, freq, coupon_schedule)
               + total_coupon - d0) / d0
@@ -296,7 +296,7 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
         for s in coupon_schedule:
             d = _to_date(s["date"])
             if t0 < d <= t1:
-                total_coupon += s["rate_pct"] / 100 * face
+                total_coupon += s["rate_pct"] / 100 * face / freq
     else:
         total_coupon = coupon_rate / 100 * face * (horizon_days / 365)
 

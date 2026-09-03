@@ -251,21 +251,43 @@ def future_bond_coupons(query: str) -> list[dict]:
 
     Возвращает [{date: 'YYYY-MM-DD', rate_pct: float}, ...] —
     только купоны с датой > сегодня. Для переменных купонов.
+    Ставка считается из value/facevalue (годовая), т.к. valueprc в
+    bondization — базовая объявленная ставка, одинаковая для всех периодов.
     """
     try:
         all_coups = bond_coupons(query)
     except Exception:
         return []
     today_str = str(__import__("datetime").date.today())
-    out = []
+    future = []
     for c in all_coups:
         d = (c.get("coupondate") or "")[:10]
-        if d <= today_str:
-            continue
-        rate = c.get("valueprc")
-        if rate is None:
-            continue
-        out.append({"date": d, "rate_pct": float(rate)})
+        if d > today_str:
+            future.append(c)
+    if not future:
+        return []
+
+    freq = 12
+    if len(future) >= 2:
+        from datetime import datetime as _dt
+        d0 = _dt.strptime(future[0]["coupondate"][:10], "%Y-%m-%d")
+        d1 = _dt.strptime(future[1]["coupondate"][:10], "%Y-%m-%d")
+        gap = (d1 - d0).days
+        if gap > 0:
+            freq = round(365 / gap)
+
+    out = []
+    for c in future:
+        d = (c.get("coupondate") or "")[:10]
+        fv = c.get("facevalue")
+        val = c.get("value")
+        if fv and val and fv > 0:
+            rate = val / fv * freq * 100
+        else:
+            rate = c.get("valueprc")
+            if rate is None:
+                continue
+        out.append({"date": d, "rate_pct": round(float(rate), 4)})
     return sorted(out, key=lambda x: x["date"])
 
 
