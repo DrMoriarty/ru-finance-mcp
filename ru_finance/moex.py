@@ -176,7 +176,12 @@ def quote(query: str) -> dict:
 
 
 def bond(query: str) -> dict:
-    """Облигация: цена %, YTM, дюрация (годы), модиф. дюрация, купон, погашение, НКД."""
+    """Облигация: цена %, YTM, дюрация (годы), модиф. дюрация, купон, погашение, НКД.
+
+    Для облигаций со ступенчатыми/переменными купонами YTM, duration и mod_duration
+    от MOEX могут быть некорректны (ISS считает по фиксированной coupon_pct).
+    Используйте bond_report для корректного расчёта с реальным расписанием купонов.
+    """
     r = resolve(query, sec_type="bond")
     raw = exec_template(T_QUOTE_BOARD, {
         "engine": r["engine"], "market": r["market"],

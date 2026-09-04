@@ -116,6 +116,10 @@ def moex_quote(query: str) -> dict:
 def moex_bond(query: str) -> dict:
     """Bond data: price %, YTM, duration (years & modified), coupon, maturity, accrued interest.
 
+    For bonds with step-down/variable coupons, YTM, duration_years and mod_duration_years
+    returned by MOEX ISS may be incorrect (computed assuming flat coupon_pct).
+    Use bond_report for accurate calculations with real coupon schedule.
+
     Args: query — OFZ number ('26253') or ISIN ('RU000A10C6F7').
     Returns: {price_pct, ytm, duration_years, mod_duration_years, coupon_pct,
     annual_coupon_per_bond, next_coupon, maturity, accrued_int, face_value, ...}.

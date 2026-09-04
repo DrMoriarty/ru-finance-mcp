@@ -48,6 +48,7 @@
 - **Принимает:** `query` — номер ОФЗ или ISIN.
 - **Возвращает:** `{price_pct, change_pct, ytm, duration_years, mod_duration_years, coupon_pct, coupon_value, annual_coupon_per_bond, next_coupon, coupon_period_days, maturity, accrued_int, face_value}`.
 - **Пример:** `moex_bond("26253")` → `{"price_pct":87.18,"ytm":15.93,"duration_years":5.9,"mod_duration_years":5.46,"annual_coupon_per_bond":130.0,"next_coupon":"2026-10-21","maturity":"2038-10-06",...}`
+- **⚠️ Ступенчатые купоны:** для облигаций с уменьшающимся/переменным купоном `ytm`, `duration_years` и `mod_duration_years` от MOEX ISS рассчитаны по фиксированной `coupon_pct` и **некорректны**. Используйте `bond_report` — он подтягивает реальное расписание купонов.
 
 ### 🟢 `moex_candles(query, frm, till, interval="24")`
 Свечи OHLCV за период.
@@ -330,9 +331,12 @@ MIACR — фактические средневзвешенные ставки �
 - **Возвращает:**
   - `bond` — как `moex_bond`;
   - `years_to_maturity` — срок до погашения в годах;
+  - `coupon_schedule` — `[{date, rate_pct}, ...]` реальное расписание будущих купонов (если есть; для ступенчатых облигаций);
+  - `macaulay_duration_years` — дюрация Маколея (всегда пересчитывается, для ступенчатых купонов — с реальным расписанием);
+  - `modified_duration_years` — модифицированная дюрация (с правильным freq);
   - `convexity` — конвексность (поправка к duration при больших сдвигах);
   - `accrued_interest` — `{accrued_rub, accrued_pct, days_accrued, coupon_period_days, last_coupon, next_coupon}`;
-  - `gry` — gross redemption yield (YTM с учётом НКД): `{gry_pct, dirty_price, accrued_rub}`;
+  - `gry` — gross redemption yield (YTM с учётом НКД): `{gry_pct, dirty_price, accrued_rub}`. Для ступенчатых купонов пересчитывается с реальным расписанием и замещает MOEX YTM;
   - `spread_to_curve` — спред YTM к G-кривой: `{spread_pp, bond_ytm, curve_yield}`;
   - `scenarios` — `{macaulay_years, breakeven_yield_rise_pp, scenarios:[{delta_pp, total_return_pct}]}` (полный доход за год при параллельном сдвиге ±п.п. + точка безубытка);
   - `twist_scenarios` — сценарии сужения/расширения кривой: `[{name, delta_pp, total_return_pct, description}]` (steepener/flattener/twist_short/twist_long);
