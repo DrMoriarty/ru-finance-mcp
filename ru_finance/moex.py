@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests as _requests
 
+from . import bonds as _bonds
 from .session import ISS, exec_template, first, get_moex, raw_get, records
 
 # ID шаблонов ISS (определены интроспекцией aioboy/moex)
@@ -338,6 +339,178 @@ def query(template_id: int, vars: dict | None = None,
         if isinstance(raw[block], dict) and "columns" in raw[block]:
             out[block] = records(raw, block)
     return out
+
+
+# ─────────────────── Облигации эмитента (emitent_bonds) ───────────────────
+
+# Основные борды облигаций на MOEX
+_BOND_BOARDS = ["TQCB", "TQOB", "TQIR"]
+
+
+def _fetch_board_bonds(board: str, retries: int = 4) -> list[dict]:
+    """Загрузить все облигации с борда (securities + marketdata) за один запрос.
+
+    Возвращает список merged-словарей (securities + marketdata + _board).
+    Поле emitent_id бордов НЕ содержит — совершать match с emitent_id нужно
+    из другого источника (ISS /securities).
+    """
+    path = f"engines/stock/markets/bonds/boards/{board}/securities"
+    raw = raw_get(path, {"iss.only": "securities,marketdata"}, retries=retries)
+    secs = records(raw, "securities")
+    mds = records(raw, "marketdata")
+    md_by_secid: dict[str, dict] = {}
+    for m in mds:
+        sid = m.get("SECID")
+        if sid:
+            md_by_secid[sid] = m
+    out: list[dict] = []
+    for s in secs:
+        sid = s.get("SECID")
+        s["_board"] = board
+        if sid and sid in md_by_secid:
+            s.update(md_by_secid[sid])
+        out.append(s)
+    return out
+
+
+def emitent_bonds(
+    query: str,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+) -> list[dict]:
+    """Все облигации эмитента с фильтрацией по дюрации/сроку до погашения.
+
+    1. Ищет бумаги через ISS /securities (emitent_id есть только там).
+    2. Определяет наиболее частый emitent_id, фиксирует множество secid.
+    3. Загружает все облигации с основных бордов (TQCB, TQOB, TQIR) batch-запросами
+       (рыночные данные: цена, дюрация, доходность).
+    4. Сопоставляет secid, фильтрует по min_duration / max_duration (в годах).
+
+    Фильтр по дюрации: приоритет — duration_years (Macaulay в днях / 365 от marketdata),
+    fallback — years_to_maturity (от MATDATE). Обе метрики возвращаются.
+
+    Args:
+        query — название/тикер эмитента (напр. 'Газпром', 'Сбербанк').
+        min_duration — минимальная дюрация в годах (включительно).
+        max_duration — максимальная дюрация в годах (включительно).
+
+    Returns:
+        Список словарей: secid, shortname, isin, board, is_traded, emitent_id, emitent,
+        issuer_name, issue_number, face_value, face_unit, coupon_pct, coupon_period,
+        next_coupon, maturity, offer_date, accrued_int, duration_years,
+        mod_duration_years, years_to_maturity, price_pct, change_pct, ytm,
+        value_today, vol_today.
+        Сортировка по duration_years ↑.
+    """
+    from datetime import date as _date
+
+    # ── Шаг 1: резолв emitent_id (ISS /securities — единственный источник id) ──
+    try:
+        search_raw = raw_get("securities", {"q": query, "limit": 200})
+        bond_rows = [r for r in records(search_raw, "securities")
+                     if r.get("group") == "stock_bonds"]
+    except Exception:  # noqa: BLE001
+        return []
+    if not bond_rows:
+        return []
+
+    eid_counts: dict[int, str] = {}
+    for r in bond_rows:
+        eid = r.get("emitent_id")
+        title = r.get("emitent_title") or ""
+        if eid:
+            eid_counts[eid] = title
+    if not eid_counts:
+        return []
+
+    target_eid: int = max(eid_counts, key=lambda e: sum(
+        1 for r in bond_rows if r.get("emitent_id") == e))
+    emitent_title = eid_counts[target_eid]
+
+    # Множество secid целевого эмитента (из поиска) — для match с бордами
+    target_secids: set[str] = set()
+    for r in bond_rows:
+        sid = r.get("secid")
+        if sid and r.get("emitent_id") == target_eid:
+            target_secids.add(sid)
+
+    # ── Шаг 2: batch-загрузка рыночных данных с бордов (параллельно) ──
+    board_data: list[dict] = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = [ex.submit(_fetch_board_bonds, b) for b in _BOND_BOARDS]
+        for f in as_completed(futs):
+            board_data.extend(f.result())
+
+    # ── Шаг 3: match + нормализация ──
+    today = _date.today()
+    matches: list[dict] = []
+    for row in board_data:
+        sid = row.get("SECID")
+        if sid not in target_secids:
+            continue
+
+        dur_days = row.get("DURATION")
+        dur_years = round(dur_days / 365, 2) if dur_days else None
+        ytm = first(row.get("YIELD"), row.get("YIELDATWAPRICE"))
+        mod_dur = None
+        if dur_years and ytm:
+            mod_dur = round(dur_years / (1 + ytm / 100 / 2), 2)
+        maturity = row.get("MATDATE")
+        try:
+            ytm_years = _bonds.years_to_maturity(maturity) if maturity else None
+        except (ValueError, TypeError):
+            ytm_years = None
+
+        price = first(row.get("LAST"), row.get("WAPRICE"),
+                      row.get("LCLOSEPRICE"), row.get("MARKETPRICE"))
+        coupon_pct = row.get("COUPONPERCENT")
+        face = row.get("FACEVALUE")
+
+        matches.append({
+            "secid": sid,
+            "shortname": row.get("SHORTNAME"),
+            "isin": row.get("ISIN"),
+            "board": row.get("_board"),
+            "is_traded": row.get("IS_TRADED"),
+            "emitent_id": target_eid,
+            "emitent": emitent_title,
+            "issuer_name": row.get("ISSUER_NAME"),
+            "issue_number": row.get("ISSUESIZE"),
+            "face_value": face,
+            "face_unit": row.get("FACEUNIT"),
+            "coupon_pct": coupon_pct,
+            "coupon_period": row.get("COUPONPERIOD"),
+            "next_coupon": row.get("NEXTCOUPON"),
+            "maturity": maturity,
+            "offer_date": row.get("OFFERDATE"),
+            "accrued_int": row.get("ACCRUEDINT"),
+            "duration_years": dur_years,
+            "mod_duration_years": mod_dur,
+            "years_to_maturity": ytm_years,
+            "price_pct": price,
+            "change_pct": row.get("LASTCHANGEPRCNT"),
+            "ytm": ytm,
+            "value_today": first(row.get("VALTODAY")),
+            "vol_today": first(row.get("VOLTODAY")),
+        })
+
+    # ── Шаг 4: фильтр по дюрации ──
+    if min_duration is not None or max_duration is not None:
+        filtered: list[dict] = []
+        for r in matches:
+            d = r.get("duration_years") or r.get("years_to_maturity")
+            if d is None:
+                continue
+            if min_duration is not None and d < min_duration:
+                continue
+            if max_duration is not None and d > max_duration:
+                continue
+            filtered.append(r)
+        matches = filtered
+
+    matches.sort(key=lambda r: r.get("duration_years")
+                 or r.get("years_to_maturity") or 999)
+    return matches
 
 
 # ─────────────────── CCI (корпоративная информация НРД) ───────────────────

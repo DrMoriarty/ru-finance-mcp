@@ -128,6 +128,29 @@ def moex_bond(query: str) -> dict:
 
 
 @mcp.tool()
+def moex_emitent_bonds(
+    query: str,
+    min_duration: float | None = None,
+    max_duration: float | None = None,
+) -> list[dict]:
+    """All bonds of an issuer with optional duration filter.
+
+    Args: query — issuer name/ticker ('Газпром', 'Сбербанк', 'ГТЛК',
+          'Атомэнергопром'). Returns bonds whose emitent_id matches the issuer.
+          min_duration/max_duration — filter by duration in years
+          (Macaulay duration, fallback: years-to-maturity).
+          Pass None to leave a bound unbound.
+
+    Returns [{secid, shortname, isin, board, is_traded, emitent, issuer_name,
+    face_value, face_unit, coupon_pct, coupon_period, next_coupon, maturity,
+    offer_date, accrued_int, duration_years, mod_duration_years,
+    years_to_maturity, price_pct, ytm, value_today, vol_today}].
+    Sorted by duration (shortest first).
+    """
+    return moex.emitent_bonds(query, min_duration, max_duration)
+
+
+@mcp.tool()
 def moex_bond_coupons(query: str) -> list[dict]:
     """Coupon schedule (past + future) from NSD/MOEX.
 
