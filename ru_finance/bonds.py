@@ -178,15 +178,18 @@ def convexity(valdate: date, maturity: date, coupon_rate: float,
 
 def accrued_interest(valdate: date, maturity: date, coupon_rate: float,
                      face: float = 1000.0, freq: int = 2,
-                     last_coupon: date | str | None = None) -> dict:
+                     last_coupon: date | str | None = None,
+                     coupon_schedule: list[dict] | None = None) -> dict:
     """Накопленный купонный доход (НКД) по облигации.
 
     last_coupon — дата последнего купона (если None, определяется автоматически
     из списка купонных дат). Возвращает {accrued_rub, accrued_pct, days_accrued,
     coupon_period_days, last_coupon, next_coupon}.
+    coupon_schedule — [{date, rate_pct}, ...]. Если передан, ставка per-period.
     """
     val = _to_date(valdate)
     mat = _to_date(maturity)
+    sched = _coupon_schedule_dict(coupon_schedule)
     dates = _coupon_dates(val - timedelta(days=365 * 30), mat, freq)
     if not dates:
         return {"accrued_rub": 0, "accrued_pct": 0, "days_accrued": 0,
@@ -198,16 +201,13 @@ def accrued_interest(valdate: date, maturity: date, coupon_rate: float,
         last = past[-1] if past else dates[0]
     future = [d for d in dates if d > val]
     nxt = future[0] if future else mat
-    if (nxt - last).days == 0:
-        coupon_per_period = coupon_rate / freq / 100 * face
+    if sched and nxt in sched:
+        coupon_per_period = sched[nxt] / freq / 100 * face
     else:
         coupon_per_period = coupon_rate / freq / 100 * face
     days_accrued = max(0, (val - last).days)
     period_days = (nxt - last).days if (nxt - last).days > 0 else 365
-    if period_days > 0:
-        accrued = coupon_per_period * days_accrued / period_days
-    else:
-        accrued = 0
+    accrued = coupon_per_period * days_accrued / period_days if period_days > 0 else 0
     return {
         "accrued_rub": round(accrued, 2),
         "accrued_pct": round(accrued / face * 100, 4),
@@ -228,7 +228,7 @@ def gry(valdate, maturity, coupon_rate, clean_price_pct, face: float = 1000.0,
     """
     val = _to_date(valdate)
     mat = _to_date(maturity)
-    ai = accrued_interest(val, mat, coupon_rate, face, freq)
+    ai = accrued_interest(val, mat, coupon_rate, face, freq, coupon_schedule=coupon_schedule)
     clean = face * clean_price_pct / 100
     dp = clean + ai["accrued_rub"]
     lo, hi = -10.0, 50.0
