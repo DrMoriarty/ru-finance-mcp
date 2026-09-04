@@ -780,11 +780,15 @@ def bond_synthetic_yield(query: str, horizon_years: float,
         cs = moex.future_bond_coupons(query)
     except Exception:  # noqa: BLE001
         cs = []
-    return bonds.synthetic_yield(
+    result = bonds.synthetic_yield(
         date.today(), b["maturity"], b["coupon_pct"], b["ytm"],
         horizon_years, reinvest_rate=reinvest_rate,
         face=b.get("face_value") or 1000, freq=freq,
         coupon_schedule=cs or None)
+    result["query"] = query
+    result["secid"] = b.get("secid")
+    result["shortname"] = b.get("shortname")
+    return result
 
 
 @mcp.tool()
