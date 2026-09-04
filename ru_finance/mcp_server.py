@@ -389,6 +389,22 @@ def moex_futures_promo() -> dict:
 
 
 @mcp.tool()
+def moex_futures_basis(asset_code: str) -> dict:
+    """Futures contango / backwardation — annualised carry from basis.
+
+    Compares futures settle price to the underlying spot price (FX rate from CBR,
+    stock/index/commodity from MOEX) and annualises the spread to expiry.
+    Positive → contango (sell futures + buy spot); negative → backwardation.
+
+    Args: asset_code — underlying code ('Si', 'RTS', 'BR', 'SBRF', ...).
+    Returns: {asset_code, underlying: {price, source}, regime,
+    contracts: [{secid, name, expiry_date, days_to_expiry, futures_price,
+    spot_price, basis_pct, annualized_return_pct, open_interest}]}.
+    """
+    return moex.futures_basis(asset_code)
+
+
+@mcp.tool()
 def moex_options_assets() -> list[dict]:
     """FORTS options underlying assets with market data.
 

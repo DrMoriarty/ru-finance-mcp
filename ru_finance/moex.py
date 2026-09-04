@@ -37,6 +37,129 @@ def _engine_market(group: str | None) -> tuple[str, str]:
     return engine, _MARKET.get(suffix, suffix)
 
 
+# Маппинг фьючерсных asset_code -> базовый актив для расчёта basis.
+# query: строка для резолва на MOEX; cbr_fx: код валюты ЦБ для spot; kind: тип актива.
+_UNDERLYING_MAP: dict[str, dict] = {
+    # FX-фьючерсы
+    "Si":   {"cbr_fx": "USD"},
+    "Eu":   {"cbr_fx": "EUR"},
+    "CNY":  {"cbr_fx": "CNY"},
+    "CHF":  {"cbr_fx": "CHF"},
+    "GBP":  {"cbr_fx": "GBP"},
+    "JPY":  {"cbr_fx": "JPY"},
+    "HKD":  {"cbr_fx": "HKD"},
+    "TRY":  {"cbr_fx": "TRY"},
+    "KZT":  {"cbr_fx": "KZT"},
+    "BYN":  {"cbr_fx": "BYN"},
+    # Индексы
+    "RTS":  {"query": "RTSI"},
+    "MREI": {"query": "MREI"},
+    "MXI":  {"query": "MIX"},
+    "RVI":  {"query": "MCFTR"},
+    "IMOEX": {"query": "IMOEX"},
+    # Сырьё
+    "BR":   {"cbr_fx": "Brent"},
+    "GOLD": {"query": "GOLD", "engine": "commodity", "market": "metals"},
+    "GL":   {"query": "GOLD", "engine": "commodity", "market": "metals"},
+    "SV":   {"query": "SLVR", "engine": "commodity", "market": "metals"},
+    "SLVR": {"query": "SLVR", "engine": "commodity", "market": "metals"},
+    "PL":   {"query": "PLTD", "engine": "commodity", "market": "metals"},
+    "CU":   {"query": "CU",   "engine": "commodity", "market": "metals"},
+    "NI":   {"query": "NI",   "engine": "commodity", "market": "metals"},
+    # Акции
+    "SBRF": {"query": "SBER"},
+    "GAZR": {"query": "GAZP"},
+    "LKOH": {"query": "LKOH"},
+    "GMKN": {"query": "GMKN"},
+    "MGNT": {"query": "MGNT"},
+    "ROSN": {"query": "ROSN"},
+    "SIBN": {"query": "SIBN"},
+    "VTBR": {"query": "VTBR"},
+    "TATN": {"query": "TATN"},
+    "ALRS": {"query": "ALRS"},
+    "FEES": {"query": "FEES"},
+    "MTSI": {"query": "MTSS"},
+    "NlNK": {"query": "NKNC"},
+}
+
+
+def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
+    """Определить спот-цену базового актива futures-контракта.
+
+    Возвращает (price, source).
+    """
+    from datetime import date as _date
+
+    ref = _UNDERLYING_MAP.get(asset_code, {})
+
+    # 1. Валютный курс ЦБ
+    cbr_fx = ref.get("cbr_fx")
+    if cbr_fx:
+        try:
+            today = _date.today()
+            fx = cbr.currency(cbr_fx, str(today.replace(day=1)), str(today), tail=1)
+            p = fx.get("latest")
+            if p:
+                return float(p), f"cbr:{cbr_fx} ({fx.get('latest_date')})"
+        except Exception:
+            pass
+        if cbr_fx == "Brent":
+            pass  # Не фоллбэкить на FX
+        else:
+            try:
+                rates = indicative_rates()
+                pair_map = {
+                    "USD": "USD/RUB", "EUR": "EUR/RUB", "CNY": "CNY/RUB",
+                    "CHF": "CHF/RUB", "GBP": "GBP/RUB", "JPY": "JPY(100)/RUB",
+                    "HKD": "HKD/RUB", "TRY": "TRY/RUB", "KZT": "KZT/RUB",
+                    "BYN": "BYN/RUB",
+                }
+                pair = pair_map.get(cbr_fx)
+                if pair:
+                    for r in reversed(rates):
+                        if r.get("secid") == pair and r.get("rate"):
+                            return float(r["rate"]), f"moex_indicative:{pair}"
+            except Exception:
+                pass
+
+    # 2. Биржевая котировка (акции, индексы, товары на MOEX)
+    query = ref.get("query", asset_code)
+    engine = ref.get("engine")
+    market = ref.get("market")
+    try:
+        if engine and market:
+            raw = raw_get(
+                f"engines/{engine}/markets/{market}/boards/ALL/securities",
+                {"iss.only": "marketdata", "limit": 1000})
+            from .session import first as _first
+            for r in records(raw, "marketdata"):
+                if r.get("SECID") == query:
+                    p = _first(r.get("LAST"), r.get("OFFER"), r.get("LCLOSEPRICE"))
+                    if p is not None:
+                        return float(p), f"moex:{engine}/{market}/{query}"
+            return None, f"moex:{engine}/{market}/{query} not found"
+        else:
+            q = quote(query)
+            p = q.get("price")
+            if p is not None:
+                return float(p), f"moex:{q['secid']} ({q.get('price_field')})"
+            return None, f"moex:{query} no price"
+    except Exception:
+        pass
+
+    # 3. Опционы asset_last_price — часто содержит spot для FORTS-активов
+    try:
+        for oa in options_assets():
+            if oa.get("asset") == asset_code:
+                p = oa.get("asset_last_price")
+                if p:
+                    return float(p), f"options_asset:{asset_code}"
+    except Exception:
+        pass
+
+    return None, "unknown"
+
+
 def resolve(query: str, sec_type: str | None = None,
             as_list: bool = False,
             traded_only: bool = False) -> dict | list[dict]:
@@ -1164,6 +1287,81 @@ def futures_series(asset: str | None = None) -> list[dict]:
             except Exception:
                 pass
     return rows
+
+
+def futures_basis(asset_code: str) -> dict:
+    """Базис (contango / backwardation) и расчётная годовая доходность.
+
+    Сравнивает цену фьючерса (settle) со спот-ценой базового актива и
+    вычисляет годовую ставку переноса (carry): (futures - spot) / spot * 365/days.
+    Положительное значение → contango (futures дороже spot), можно «продать
+    фьючерс + купить spot» и дождаться конвергенции к экспирации.
+    Отрицательное → backwardation (futures дешевле spot).
+
+    Вход: asset_code — код базисного актива ('Si', 'RTS', 'BR', 'GAZR', ...).
+    Возвращает: {asset_code, underlying: {price, source}, regime, contracts: [...]}.
+    """
+    from datetime import date as _date, datetime as _dt
+
+    contracts = futures_list(asset_code)
+    if not contracts:
+        return {"asset_code": asset_code, "error": "нет контрактов"}
+
+    series_map: dict[str, int] = {}
+    for sr in futures_series(asset_code):
+        did = sr.get("days_to_expiry")
+        if did is not None and did >= 0:
+            series_map[sr["secid"]] = did
+
+    spot_price, spot_source = _resolve_spot_price(asset_code)
+    spot_info = {"price": spot_price, "source": spot_source}
+
+    if not spot_price or spot_price <= 0:
+        return {
+            "asset_code": asset_code, "underlying": spot_info,
+            "regime": "unknown", "contracts": [], "error": "нет спот-цены",
+        }
+
+    data = []
+    for c in contracts:
+        settle = c.get("last_settle_price")
+        expiry_date = c.get("expiry_date", "")
+        days = series_map.get(c["secid"])
+        if days is None and expiry_date:
+            try:
+                d = _dt.strptime(str(expiry_date)[:10], "%Y-%m-%d").date()
+                days = (d - _date.today()).days
+            except (ValueError, TypeError):
+                try:
+                    d = _dt.strptime(str(expiry_date)[:10], "%d.%m.%Y").date()
+                    days = (d - _date.today()).days
+                except (ValueError, TypeError):
+                    days = None
+        if settle is None or not expiry_date or days is None or days <= 0:
+            continue
+
+        ann = (settle / spot_price - 1) * 36500.0 / days
+        data.append({
+            "secid": c["secid"], "name": c.get("name"),
+            "expiry_date": str(expiry_date)[:10],
+            "days_to_expiry": days,
+            "futures_price": float(settle),
+            "spot_price": spot_price,
+            "basis_pct": round((settle / spot_price - 1) * 100, 4),
+            "annualized_return_pct": round(ann, 4),
+            "open_interest": c.get("open_interest"),
+        })
+
+    regime = "unknown"
+    if data:
+        regime = "contango" if data[0]["annualized_return_pct"] >= 0 else "backwardation"
+
+    return {
+        "asset_code": asset_code,
+        "underlying": spot_info,
+        "regime": regime,
+        "contracts": sorted(data, key=lambda x: x["expiry_date"]),
+    }
 
 
 def futures_promo() -> dict:
