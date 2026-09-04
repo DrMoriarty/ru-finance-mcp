@@ -641,10 +641,12 @@ def bond_report(query: str) -> dict:
         rep["real_return"] = bonds.real_return(ytm, actual_inflation=actual_inflation)
 
     dur = b.get("duration_years")
-    if cs and mat and ytm:
+    if mat and ytm:
         dur = bonds.macaulay_duration(
             date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq,
             coupon_schedule=cs)
+        rep["macaulay_duration_years"] = dur
+        rep["modified_duration_years"] = round(dur / (1 + ytm / 100 / freq), 2)
     if mat and ytm and dur:
         rep["twist_scenarios"] = bonds.twist_scenarios(
             mat, c_pct, ytm, dur, today=str(date.today()), freq=freq,
