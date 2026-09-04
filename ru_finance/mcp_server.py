@@ -750,6 +750,44 @@ def bond_accrued_interest(query: str) -> dict:
 
 
 @mcp.tool()
+def bond_synthetic_yield(query: str, horizon_years: float,
+                         reinvest_rate: float | None = None) -> dict:
+    """Synthetic yield with coupon reinvestment over investment horizon.
+
+    Calculates IRR of the full cash flow: buy at dirty price, coupons
+    reinvested at reinvest_rate (default: YTM), sell at assumed YTM at
+    horizon (or receive face if horizon >= maturity).
+
+    Args:
+        query — OFZ number/ISIN ('26253' or 'RU000A10C6F7').
+        horizon_years — investment horizon in years (e.g. 3.0).
+        reinvest_rate — coupon reinvestment rate, % annualized (optional,
+            defaults to current YTM).
+
+    Returns: {irr_pct, ytm_pct, horizon_years, reinvest_rate_pct,
+    buy_price_rub, total_coupons_rub, reinvested_coupons_rub,
+    final_value_rub, total_at_horizon_rub, total_return_pct,
+    annualized_return_pct, coupon_count, note}.
+
+    irr_pct — annualized internal rate of return of the full strategy.
+    Comparison with ytm_pct shows the impact of reinvestment assumptions.
+    """
+    b = moex.bond(query)
+    if not b.get("maturity") or b.get("coupon_pct") is None or not b.get("ytm"):
+        return {"error": "insufficient bond data (need maturity, coupon, ytm)"}
+    freq = _freq_from_coupon_period(b.get("coupon_period_days"))
+    try:
+        cs = moex.future_bond_coupons(query)
+    except Exception:  # noqa: BLE001
+        cs = []
+    return bonds.synthetic_yield(
+        date.today(), b["maturity"], b["coupon_pct"], b["ytm"],
+        horizon_years, reinvest_rate=reinvest_rate,
+        face=b.get("face_value") or 1000, freq=freq,
+        coupon_schedule=cs or None)
+
+
+@mcp.tool()
 def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dict:
     """Volatility, Sharpe ratio, max drawdown from daily candles.
 

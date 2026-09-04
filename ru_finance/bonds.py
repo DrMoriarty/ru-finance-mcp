@@ -327,3 +327,105 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
             ),
         })
     return out
+
+
+def synthetic_yield(valdate, maturity, coupon_rate: float, ytm: float,
+                    horizon_years: float, reinvest_rate: float | None = None,
+                    face: float = 1000.0, freq: int = 2,
+                    coupon_schedule: list[dict] | None = None) -> dict:
+    """Синтетическая доходность облигации с реинвестированием купонов.
+
+    Считает IRR всего денежного потока: покупка по грязной цене, купоны
+    реинвестируются по ставке reinvest_rate (если None — по YTM), в конце
+    горизонта продаём по предполагаемой YTM (если горизонт < погашения)
+    или получаем номинал (если горизонт >= погашения).
+
+    Args:
+        valdate — дата оценки ('YYYY-MM-DD' или date)
+        maturity — дата погашения
+        coupon_rate — купонная ставка, %
+        ytm — текущая доходность к погашению, %
+        horizon_years — горизонт инвестирования, лет
+        reinvest_rate — ставка реинвестирования купонов, % (None = ytm)
+        face — номинал
+        freq — купонная частота в год
+        coupon_schedule — [{date, rate_pct}, ...] для переменных купонов
+
+    Возвращает:
+        {irr_pct, ytm_pct, horizon_years, reinvest_rate_pct,
+         total_coupons_rub, reinvested_coupons_rub, final_value_rub,
+         total_return_pct, annualized_return_pct, coupon_count}
+    """
+    valdate = _to_date(valdate)
+    maturity = _to_date(maturity)
+    reinvest = reinvest_rate if reinvest_rate is not None else ytm
+    horizon_days = int(horizon_years * 365)
+    horizon_date = valdate + timedelta(days=horizon_days)
+
+    # Грязная цена покупки
+    buy_price = dirty_price(valdate, maturity, coupon_rate, ytm, face, freq, coupon_schedule)
+    sched = _coupon_schedule_dict(coupon_schedule)
+
+    # Собираем купоны в период горизонта
+    coupon_dates_all = _coupon_dates(valdate, maturity, freq)
+    coupons_in_horizon = []
+    for d in coupon_dates_all:
+        if valdate < d <= horizon_date:
+            if sched and d in sched:
+                c_amount = sched[d] / freq / 100 * face
+            else:
+                c_amount = coupon_rate / freq / 100 * face
+            coupons_in_horizon.append({"date": d, "amount": c_amount})
+
+    total_coupons = sum(c["amount"] for c in coupons_in_horizon)
+
+    # Реинвестирование купонов: каждый купон реинвестируется до конца горизонта
+    reinvested_value = 0.0
+    for c in coupons_in_horizon:
+        days_to_horizon = (horizon_date - c["date"]).days
+        years_to_horizon = days_to_horizon / 365
+        # Сложный процент: купон растёт по ставке реинвестирования
+        fv = c["amount"] * (1 + reinvest / 100) ** years_to_horizon
+        reinvested_value += fv
+
+    # Конечная стоимость облигации на горизонте
+    if horizon_date >= maturity:
+        # Погашение: получаем номинал + последний купон
+        final_value = face
+        # Последний купон уже учтён в coupons_in_horizon, если дата <= horizon_date
+    else:
+        # Продаём по предполагаемой YTM
+        final_value = dirty_price(horizon_date, maturity, coupon_rate, ytm,
+                                  face, freq, coupon_schedule)
+
+    # Считаем IRR: solve for r in:
+    # buy_price = sum(c_i / (1+r)^t_i) + final / (1+r)^T
+    # где c_i — реинвестированные купоны (как единный поток в конце горизонта)
+    # Упрощённо: объединяем реинвестированные купоны и конечную стоимость
+    total_at_horizon = reinvested_value + final_value
+
+    # IRR: (total_at_horizon / buy_price) ^ (1/horizon_years) - 1
+    if buy_price > 0 and horizon_years > 0:
+        irr = ((total_at_horizon / buy_price) ** (1 / horizon_years) - 1) * 100
+    else:
+        irr = 0.0
+
+    total_return_pct = (total_at_horizon - buy_price) / buy_price * 100
+
+    return {
+        "irr_pct": round(irr, 3),
+        "ytm_pct": ytm,
+        "horizon_years": horizon_years,
+        "reinvest_rate_pct": round(reinvest, 2),
+        "buy_price_rub": round(buy_price, 2),
+        "total_coupons_rub": round(total_coupons, 2),
+        "reinvested_coupons_rub": round(reinvested_value, 2),
+        "final_value_rub": round(final_value, 2),
+        "total_at_horizon_rub": round(total_at_horizon, 2),
+        "total_return_pct": round(total_return_pct, 2),
+        "annualized_return_pct": round(irr, 2),
+        "coupon_count": len(coupons_in_horizon),
+        "note": ("купоны реинвестированы по ставке reinvest_rate; "
+                 "конечная цена — по текущей YTM (если горизонт < погашения) "
+                 "или номинал (если погашение на горизонте); без налогов"),
+    }
