@@ -87,42 +87,22 @@ def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
     """Определить спот-цену базового актива futures-контракта.
 
     Возвращает (price, source).
+    Для FX-фьючерсов (cbr_fx задан) — курс ЦБ или индикативные MOEX.
+    Для не-FX (акции, индексы, товары) — quote() с MOEX.
+    В обоих случаях settle_per_unit = settle / lot_volume (для basis).
     """
     from datetime import date as _date
 
     ref = _UNDERLYING_MAP.get(asset_code, {})
-
-    # 1. Валютный курс ЦБ
     cbr_fx = ref.get("cbr_fx")
-    if cbr_fx:
-        try:
-            today = _date.today()
-            fx = cbr.currency(cbr_fx, str(today.replace(day=1)), str(today), tail=1)
-            p = fx.get("latest")
-            if p:
-                return float(p), f"cbr:{cbr_fx} ({fx.get('latest_date')})"
-        except Exception:
-            pass
-        if cbr_fx == "Brent":
-            pass  # Не фоллбэкить на FX
-        else:
-            try:
-                rates = indicative_rates()
-                pair_map = {
-                    "USD": "USD/RUB", "EUR": "EUR/RUB", "CNY": "CNY/RUB",
-                    "CHF": "CHF/RUB", "GBP": "GBP/RUB", "JPY": "JPY(100)/RUB",
-                    "HKD": "HKD/RUB", "TRY": "TRY/RUB", "KZT": "KZT/RUB",
-                    "BYN": "BYN/RUB",
-                }
-                pair = pair_map.get(cbr_fx)
-                if pair:
-                    for r in reversed(rates):
-                        if r.get("secid") == pair and r.get("rate"):
-                            return float(r["rate"]), f"moex_indicative:{pair}"
-            except Exception:
-                pass
 
-    # 2. Биржевая котировка (акции, индексы, товары на MOEX)
+    # --- Валютные фьючерсы (Si, Eu, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN) ---
+    if cbr_fx and cbr_fx != "Brent":
+        spot, src = _spot_via_cbr(cbr_fx)
+        if spot:
+            return spot, src
+
+    # --- Не-FX: quote() backend MOEX ---
     query = ref.get("query", asset_code)
     engine = ref.get("engine")
     market = ref.get("market")
@@ -137,27 +117,62 @@ def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
                     p = _first(r.get("LAST"), r.get("OFFER"), r.get("LCLOSEPRICE"))
                     if p is not None:
                         return float(p), f"moex:{engine}/{market}/{query}"
-            return None, f"moex:{engine}/{market}/{query} not found"
+                    break  # found but no price, fall through to options_asset
+            # exhausted: fall through
         else:
             q = quote(query)
             p = q.get("price")
             if p is not None:
                 return float(p), f"moex:{q['secid']} ({q.get('price_field')})"
-            return None, f"moex:{query} no price"
+            # price=None → fall through to options_asset
     except Exception:
         pass
 
-    # 3. Опционы asset_last_price — часто содержит spot для FORTS-активов
+    # --- Фоллбэк: options_assets (spot from FORTS options underlying) ---
+
+    # --- Фоллбэк: options_assets (spot from FORTS options) ---
     try:
         for oa in options_assets():
             if oa.get("asset") == asset_code:
                 p = oa.get("asset_last_price")
-                if p:
+                if p is not None:
                     return float(p), f"options_asset:{asset_code}"
     except Exception:
         pass
 
     return None, "unknown"
+
+
+def _spot_via_cbr(cbr_fx: str) -> tuple[float | None, str]:
+    """Получить курс ЦБ: сначала CBR (последний доступный), потом indicative MOEX."""
+    if cbr_fx == "Brent":
+        return None, "skip"
+    try:
+        from datetime import date as _date
+        today = _date.today()
+        from . import cbr as _cbr
+        fx = _cbr.currency(cbr_fx, str(today.replace(day=1)), str(today), tail=1)
+        p = fx.get("latest")
+        if p:
+            return float(p), f"cbr:{cbr_fx} ({fx.get('latest_date')})"
+    except Exception:
+        pass
+    pair_map = {
+        "USD": "USD/RUB", "EUR": "EUR/RUB", "CNY": "CNY/RUB",
+        "GBP": "GBP/RUB", "CHF": "CHF/RUB", "JPY": "JPY(100)/RUB",
+        "HKD": "HKD/RUB", "TRY": "TRY/RUB", "KZT": "KZT/RUB",
+        "BYN": "BYN/RUB",
+    }
+    pair = pair_map.get(cbr_fx)
+    if pair:
+        try:
+            rates = indicative_rates()
+            for r in reversed(rates):
+                if r.get("secid") == pair and r.get("rate"):
+                    return float(r["rate"]), f"moex_indicative:{pair}"
+        except Exception:
+            pass
+    return None, "fix not found"
 
 
 def resolve(query: str, sec_type: str | None = None,
@@ -1340,14 +1355,22 @@ def futures_basis(asset_code: str) -> dict:
         if settle is None or not expiry_date or days is None or days <= 0:
             continue
 
-        ann = (settle / spot_price - 1) * 36500.0 / days
+        lot = c.get("lot_volume") or 1
+
+        ratio = float(settle) / spot_price if spot_price else 0
+        if ratio > 10:
+            settle_per_unit = float(settle) / lot if lot != 0 else float(settle)
+        else:
+            settle_per_unit = float(settle)
+        ann = (settle_per_unit / spot_price - 1) * 36500.0 / days
         data.append({
             "secid": c["secid"], "name": c.get("name"),
             "expiry_date": str(expiry_date)[:10],
             "days_to_expiry": days,
             "futures_price": float(settle),
+            "futures_price_per_unit": round(settle_per_unit, 6),
             "spot_price": spot_price,
-            "basis_pct": round((settle / spot_price - 1) * 100, 4),
+            "basis_pct": round((settle_per_unit / spot_price - 1) * 100, 4),
             "annualized_return_pct": round(ann, 4),
             "open_interest": c.get("open_interest"),
         })
