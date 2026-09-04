@@ -146,14 +146,25 @@ def moex_candles(query: str, frm: str, till: str, interval: str = "24") -> list[
 
 
 @mcp.tool()
-def moex_history(query: str, frm: str, till: str) -> list[dict]:
-    """Daily trading history for a date range.
+def moex_full_history(query: str, frm: str, till: str) -> list[dict]:
+    """Daily trading history with all fields for a date range.
 
     Args: query; frm/till ('YYYY-MM-DD').
-    Returns [{TRADEDATE, CLOSE, VOLUME, VALUE, ...}] — one row per trading day.
-    WARNING: avoid large date ranges (>1 year) — too many rows flood the agent context.
+    Returns [{TRADEDATE, CLOSE, VOLUME, VALUE, ...}] — full row per trading day.
+    WARNING: large date ranges (>1 month) may return A LOT of rows.
     """
     return moex.history(query, frm, till)
+
+
+@mcp.tool()
+def moex_history(query: str, frm: str, till: str) -> list[dict]:
+    """Daily trading history with minimal fields for a date range.
+
+    Args: query; frm/till ('YYYY-MM-DD').
+    Returns [{TRADEDATE, CLOSE, VOLUME}] — compact data per trading day.
+    """
+    full = moex.history(query, frm, till)
+    return [{"TRADEDATE": r["TRADEDATE"], "CLOSE": r["CLOSE"], "VOLUME": r["VOLUME"]} for r in full]
 
 
 @mcp.tool()
