@@ -467,6 +467,39 @@ def raexpert_rating(query: str) -> list[dict]:
     return raexpert.rating_search(query)
 
 
+@mcp.tool()
+def raexpert_emitent_ratings(
+    rating_min: str | None = None,
+    sector: str | None = None,
+) -> list[dict]:
+    """Bond issuers (emitents) filtered by credit rating and/or industry sector.
+
+    Source: raexpert.ru (rating data, 4h cache) + MOEX sector indices (mapping).
+    Returns only emitents (companies/banks/insurers), not individual bond emissions.
+
+    Rating filter: keeps emitents with rating >= rating_min (e.g. 'ruBBB-' = investment
+    grade and above). Entries with 'отозван' (revoked) are excluded when filtering.
+    Rating scale (descending): ruAAA(19) > ruAA+(18) > ruAA(17) > ruAA-(16) >
+      ruA+(15) > ruA(14) > ruA-(13) > ruBBB+(12) > ruBBB(11) > ruBBB-(10) >
+      ruBB+(9) > ruBB(8) > ruBB-(7) > ruB+(6) > ruB(5) > ruB-(4) > ruCCC(3).
+
+    Sector filter: matches ~100 major emitents from MOEX sectoral stock indices
+      (MOEXFN, MOEXOG, etc.) by company name. Available sectors: Финансовый,
+      Нефтегазовый, Потребительский, Телекоммуникации, Электроэнергетика,
+      Транспорт, Металлургия и добыча, Недвижимость, Химия, Инновации и IT.
+      Covers only public companies traded on MOEX; non-listed companies in these
+      sectors won't match.
+
+    Args (all optional — without args returns all emitents with revoked):
+      rating_min — minimum rating ('ruBBB−', 'ruA+', 'ruA', 'ruAA-', ...).
+      sector — MOEX sector name (exact match from the list above).
+
+    Returns [{name, rating, outlook, date, category, sector?, agency}].
+    Results sorted by rating (best first), then by name.
+    """
+    return raexpert.emitent_rating_search(rating_min=rating_min, sector=sector)
+
+
 # ─────────────────────────── ZPIF payments (vsezpif.ru) ───────────────────────────
 @mcp.tool()
 def zpif_payments(

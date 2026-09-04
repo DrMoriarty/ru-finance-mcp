@@ -53,6 +53,259 @@ _CATEGORIES: dict[str, str] = {
 
 _cache_all: tuple[float, list[dict[str, Any]]] | None = (0.0, [])
 
+# ── MOEX отраслевые индексы: название сектора → тикеры акций ──
+# Составы из https://iss.moex.com/iss/statistics/engines/stock/markets/index/analytics/{id}.json
+# Обновлять при изменении состава индексов (~2 раза в год).
+_MOEX_SECTOR_TICKERS: dict[str, list[str]] = {
+    "Финансовый": [
+        "SBER", "SBERP", "VTBR", "T", "CBOM", "BSPB", "SVCB", "MOEX",
+        "RENI", "SPBE", "SFIN", "DOMRF", "MBNK",
+    ],
+    "Нефтегазовый": [
+        "GAZP", "LKOH", "ROSN", "TATN", "TATNP", "SNGS", "SNGSP",
+        "NVTK", "BANEP", "RNFT", "TRNFP",
+    ],
+    "Потребительский": [
+        "MGNT", "X5", "LENT", "BELU", "APTK", "GEMC", "HNFG", "EUTR",
+        "FIXR", "AQUA", "MDMG", "OZPH", "PRMD", "RAGR", "SVAV", "VSEH", "WUSH",
+    ],
+    "Телекоммуникации": ["MTSS", "RTKM", "RTKMP", "MGTSP"],
+    "Электроэнергетика": [
+        "FEES", "HYDR", "IRAO", "MSNG", "OGKB", "TGKA", "UPRO", "ELFV",
+        "LSNGP", "MRKC", "MRKP", "MRKU", "MRKV", "MSRS",
+    ],
+    "Транспорт": ["AFLT", "NMTP", "FLOT", "FESH", "NKHP"],
+    "Металлургия и добыча": [
+        "GMKN", "NLMK", "MAGN", "CHMF", "ALRS", "RUAL", "ENPG", "PLZL",
+        "MTLR", "MTLRP", "RASP", "SELG", "TRMK", "UGLD", "VSMO",
+    ],
+    "Недвижимость": ["PIKK", "LSRG", "ETLN", "GLRX", "SMLT"],
+    "Химия": ["PHOR", "AKRN", "NKNCP"],
+    "Инновации и IT": [
+        "YDEX", "ASTR", "DATA", "DIAS", "IVAT", "NAUK", "NSVZ", "OZPH",
+        "POSI", "PRMD", "SOFL", "WUSH", "ABIO", "BAZA", "CNRU",
+        "DELI", "ELMT", "GECO", "GEMA", "UNAC",
+    ],
+}
+
+# Обратный маппинг: тикер → сектор
+_MOEX_TICKER_TO_SECTOR: dict[str, str] = {
+    t.upper(): sector for sector, tickers in _MOEX_SECTOR_TICKERS.items() for t in tickers
+}
+# Названия известных секторов (для валидации параметра sector)
+SECTORS: list[str] = list(_MOEX_SECTOR_TICKERS)
+
+# ── Порядок рейтингов (для фильтрации ≥ заданного) ──
+_RATING_ORDER: dict[str, int] = {
+    "ruAAA": 19, "ruAA+": 18, "ruAA": 17, "ruAA-": 16,
+    "ruA+": 15, "ruA": 14, "ruA-": 13,
+    "ruBBB+": 12, "ruBBB": 11, "ruBBB-": 10,
+    "ruBB+": 9, "ruBB": 8, "ruBB-": 7,
+    "ruB+": 6, "ruB": 5, "ruB-": 4,
+    "ruCCC": 3, "ruCC": 2, "ruC": 1, "ruD": 0,
+}
+
+_cache_sector_map: dict[str, str] | None = None
+
+
+def _normalize_emitent_name(name: str) -> str:
+    """Нормализация названия эмитента для fuzzy-сравнения.
+
+    Убирает организационно-правовую форму (сокращения и полные), кавычки,
+    лишние пробелы.
+    Пример: 'ПАО «Сбербанк России»' -> 'СБЕРБАНК РОССИИ'
+            'ПУБЛИЧНОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО ГАЗПРОМ' -> 'ГАЗПРОМ'
+    """
+    n = name.upper()
+    # Сокращённая ОПФ в начале
+    n = re.sub(
+        r"^(?:ПАО|АО|ООО|ЗАО|ОАО|НАО|ПАТ|ЧАО|ФГУП|ГУП|МУП|АНО|НПФ)\s+",
+        "", n,
+    )
+    # Сокращённая ОПФ в конце
+    n = re.sub(
+        r"\s+(?:ПАО|АО|ООО|ЗАО|ОАО|НАО|ПАТ|ЧАО)$",
+        "", n,
+    )
+    # Полная ОПФ в начале (скобки-варианты в конце)
+    n = re.sub(
+        r"^(?:ПУБЛИЧНОЕ\s+)?АКЦИОНЕРНОЕ\s+ОБЩЕСТВО\s*", "", n,
+    )
+    n = re.sub(
+        r"^ОБЩЕСТВО\s+С\s+ОГРАНИЧЕННОЙ\s+ОТВЕТСТВЕННОСТЬЮ\s*", "", n,
+    )
+    n = re.sub(
+        r"^НЕГОСУДАРСТВЕННЫЙ\s+ПЕНСИОННЫЙ\s+ФОНД\s*", "", n,
+    )
+    # Скобки с ОПФ в конце: (ПАО), (ПУБЛИЧНОЕ АКЦИОНЕРНОЕ ОБЩЕСТВО) и т.п.
+    # Включая суффиксы вроде (ПАО)АО, (ООО)ООО
+    n = re.sub(
+        r"(?:\s*\([^)]*(?:ПАО|АКЦИОНЕРНОЕ\s+ОБЩЕСТВО|ООО)[^)]*\))+(?:АО|ООО|ПАО)?\s*",
+        "", n,
+    )
+    # Кавычки-ёлочки и обычные
+    n = re.sub(r'[\u00ab\u00bb"\u201c\u201d]', "", n)
+    n = re.sub(r"«|»", "", n)
+    # Точки в инициалах (В.Д. -> ВД) — для сравнения
+    n = re.sub(r"\b([А-Я])\.\s*", r"\1", n)
+    # Множественные пробелы
+    n = re.sub(r"\s+", " ", n).strip()
+    return n
+
+
+def _build_sector_map() -> dict[str, str]:
+    """Нормализованное имя → MOEX-сектор для всех акций из отраслевых индексов.
+
+    Загружает SECNAME из bulk-эндпоинта МосБиржи (один HTTP-запрос).
+    Результат кэшируется в памяти.
+    """
+    global _cache_sector_map
+    if _cache_sector_map is not None:
+        return _cache_sector_map
+
+    result: dict[str, str] = {}
+    all_tickers = {t for t in _MOEX_TICKER_TO_SECTOR}
+
+    try:
+        import requests as _req
+        url = "https://iss.moex.com/iss/engines/stock/markets/shares/securities.json"
+        resp = _req.get(
+            url,
+            params={"iss.meta": "off", "iss.only": "securities", "limit": 3000},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        cols = data["securities"]["columns"]
+        sci = cols.index("SECID")
+        sni = cols.index("SECNAME")
+        for row in data["securities"]["data"]:
+            secid = row[sci]
+            if secid in all_tickers and row[sni]:
+                norm_name = _norm_secname(row[sni])
+                if norm_name:
+                    result[norm_name] = _MOEX_TICKER_TO_SECTOR[secid]
+    except Exception:
+        pass
+
+    _cache_sector_map = result
+    return result
+
+
+def _norm_secname(name: str) -> str:
+    """Упрощённая нормализация SECNAME MOEX: убирает 'ао'/'ап' суффиксы."""
+    n = re.sub(r"\s+(?:ао|ап|гдр|нр)\s*$", "", name, flags=re.I)
+    return _normalize_emitent_name(n)
+
+
+def _sector_for_emitent(name: str) -> str | None:
+    """Определить MOEX-сектор эмитента raexpert по названию.
+
+    1) Точное совпадение после нормализации.
+    2) Подстрока: нормализованное имя raexpert входит в MOEX имя или наоборот.
+    """
+    sector_map = _build_sector_map()
+    if not sector_map:
+        return None
+
+    raexpert_norm = _normalize_emitent_name(name)
+    if not raexpert_norm:
+        return None
+
+    # Точное совпадение
+    if raexpert_norm in sector_map:
+        return sector_map[raexpert_norm]
+
+    # Подстрочное совпадение (минимум 3 символа)
+    if len(raexpert_norm) >= 3:
+        for moex_name, sector in sector_map.items():
+            if raexpert_norm in moex_name or moex_name in raexpert_norm:
+                return sector
+
+    return None
+
+
+def emitent_rating_search(
+    rating_min: str | None = None,
+    sector: str | None = None,
+) -> list[dict[str, Any]]:
+    """Поиск эмитентов по кредитному рейтингу и отрасли.
+
+    Args:
+        rating_min — минимальный рейтинг ('ruBBB-', 'ruA', ...).
+                     Шкала: ruAAA (19) > ruAA+ (18) > ... > ruB- (4) > ruCCC (3)
+                             > ruD (0). Записи с «отозван» исключаются.
+        sector — название отрасли MOEX (одно из SECTORS).
+                 Маппинг: ~100 крупнейших эмитентов из отраслевых индексов МосБиржи.
+
+    Возврат: [{name, rating, outlook, date, category, sector?, agency}, ...].
+    Без фильтров — все эмитенты (включая «отозван»).
+    """
+    all_ratings = _fetch_all_ratings()
+    emitents = [r for r in all_ratings if r["type"] == "emitent"]
+
+    # ── Фильтр по рейтингу ──
+    if rating_min:
+        min_score = _RATING_ORDER.get(rating_min.strip())
+        if min_score is None:
+            raise ValueError(
+                f"Неизвестный рейтинг: {rating_min!r}. "
+                f"Допустимые: {', '.join(_RATING_ORDER)}"
+            )
+        emitents = [
+            r for r in emitents
+            if r["rating"] != "отозван" and _RATING_ORDER.get(r["rating"], -1) >= min_score
+        ]
+
+    # ── Фильтр по сектору ──
+    if sector:
+        sector_norm = sector.strip()
+        if sector_norm not in SECTORS:
+            raise ValueError(
+                f"Неизвестный сектор: {sector!r}. "
+                f"Допустимые: {', '.join(SECTORS)}"
+            )
+        filtered: list[dict[str, Any]] = []
+        for r in emitents:
+            found_sector = _sector_for_emitent(r["name"])
+            if found_sector == sector_norm:
+                filtered.append(r)
+        emitents = filtered
+
+    need_sector = sector is not None
+
+    # ── Результат ──
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in emitents:
+        name = r["name"]
+        if name in seen:
+            continue
+        seen.add(name)
+        item: dict[str, Any] = {
+            "name": name,
+            "rating": r["rating"],
+            "outlook": r.get("outlook", ""),
+            "date": r["date"],
+            "category": r["category"],
+            "agency": "Эксперт РА",
+        }
+        if need_sector:
+            s = _sector_for_emitent(name)
+            if s:
+                item["sector"] = s
+        result.append(item)
+
+    # Сортировка: рейтинг по убыванию (макс. первый), затем по имени
+    result.sort(key=lambda x: (-_RATING_ORDER.get(x["rating"], -1), x["name"]))
+    return result
+
+
+def list_categories() -> dict[str, str]:
+    """Список доступных категорий рейтингов."""
+    return dict(_CATEGORIES)
+
+
 # Паттерн рейтинга Эксперт РА:
 # ruAAA, ruAA+, ruAA, ruAA-, ruA+, ruA, ruA-, ruBBB+, ..., ruB-, ruCCC
 # Также: отозван, SB, ruAAA(EXP), ruBBB-(EXP)
