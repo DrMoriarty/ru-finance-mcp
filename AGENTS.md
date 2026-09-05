@@ -96,7 +96,20 @@
   smart-lab.ru), `vsezpif.py` (календарь выплат ЗПИФ недвижимости с vsezpif.ru),
   `raexpert.py` (кредитные рейтинги Эксперт РА: эмитенты + облигации,
   скрейпинг raexpert.ru).
-  Наружу всё пробрасывается как инструменты в `mcp_server.py` (54 `@mcp.tool()`).
+  Наружу всё пробрасывается как инструменты в `mcp_server.py` (59 `@mcp.tool()`).
+
+## Streaming и progress notifications
+
+Сервер поддерживает **progress notifications** через `ctx.report_progress()` —
+клиент видит промежуточные обновления во время работы тяжёлых инструментов
+(portfolio_snapshot, bond_report, rate_expectations и др.; 15 async tools).
+Клиенты без progress token просто не увидят нотификаций — обратная совместимость
+сохраняется.
+
+**SSE resumability:** для HTTP-транспорта работает `InMemoryEventStore` — при обрыве
+соединения клиент переподключается по `Last-Event-ID` и получает пропущенные
+нотификации. `retry_interval=5` с.
+
 - **Личные данные — вне репо.** `assets.md`/`context.md` (портфель и контекст
   пользователя) находятся в родительской папке и в `.gitignore` — не создавай их
   здесь и не храни в коде.

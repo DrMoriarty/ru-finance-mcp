@@ -10,14 +10,53 @@ from __future__ import annotations
 
 import base64
 import os
+from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
 from . import bonds, cbr, moex, portfolio, raexpert, rate, smartlab, vsezpif
+
+
+class InMemoryEventStore(EventStore):
+    """Simple in-memory event store for SSE resumability.
+
+    Stores events per stream_id, allows replay after a given event_id.
+    Bounded: keeps at most _MAX_EVENTS per stream.
+    """
+
+    _MAX_EVENTS = 256
+
+    def __init__(self) -> None:
+        self._events: dict[StreamId, list[tuple[EventId, EventMessage | None]]] = defaultdict(list)
+        self._counter = 0
+
+    async def store_event(self, stream_id: StreamId, message: EventMessage | None) -> EventId:
+        self._counter += 1
+        event_id = f"evt-{self._counter}"
+        events = self._events[stream_id]
+        events.append((event_id, message))
+        if len(events) > self._MAX_EVENTS:
+            del events[: len(events) - self._MAX_EVENTS]
+        return event_id
+
+    async def replay_events_after(
+        self,
+        last_event_id: EventId,
+        send_callback: EventCallback,
+    ) -> StreamId | None:
+        for stream_id, events in self._events.items():
+            for idx, (eid, msg) in enumerate(events):
+                if eid == last_event_id:
+                    for _, m in events[idx + 1 :]:
+                        if m is not None:
+                            await send_callback(m)
+                    return stream_id
+        return None
 
 
 def _freq_from_coupon_period(period_days: int | None) -> int:
@@ -40,12 +79,16 @@ def _load_icons() -> list[Icon] | None:
     return [Icon(src=f"data:image/png;base64,{data}", mimeType="image/png", sizes=["256x256"])]
 
 
+_event_store = InMemoryEventStore()
+
 mcp = FastMCP(
     "ru-finance",
     icons=_load_icons(),
     host=os.environ.get("MCP_HOST", "127.0.0.1"),
     port=int(os.environ.get("MCP_PORT", "8000")),
-    stateless_http=True,  # без сессий — удобно за reverse-proxy для нескольких клиентов
+    stateless_http=False,  # stateful: SSE resumability via event store
+    event_store=_event_store,
+    retry_interval=5,  # seconds — SSE reconnect interval for clients
     # Сервер рассчитан на работу за reverse-proxy (nginx) при remote-доступе.
     # Встроенная в SDK DNS-rebinding защита пускает только localhost-Host и режет
     # проксированные запросы (421 Invalid Host header); доступ ограничивается на
@@ -128,8 +171,9 @@ def moex_bond(query: str) -> dict:
 
 
 @mcp.tool()
-def moex_emitent_bonds(
+async def moex_emitent_bonds(
     query: str,
+    ctx: Context,
     min_duration: float | None = None,
     max_duration: float | None = None,
 ) -> list[dict]:
@@ -147,6 +191,7 @@ def moex_emitent_bonds(
     years_to_maturity, price_pct, ytm, value_today, vol_today}].
     Sorted by duration (shortest first).
     """
+    await ctx.report_progress(0, 2, "Fetching issuer bonds")
     return moex.emitent_bonds(query, min_duration, max_duration)
 
 
@@ -389,7 +434,7 @@ def moex_futures_promo() -> dict:
 
 
 @mcp.tool()
-def moex_futures_basis(asset_code: str) -> dict:
+async def moex_futures_basis(asset_code: str, ctx: Context) -> dict:
     """Futures contango / backwardation — annualised carry from basis.
 
     Compares futures settle price to the underlying spot price (FX rate from CBR,
@@ -401,6 +446,7 @@ def moex_futures_basis(asset_code: str) -> dict:
     contracts: [{secid, name, expiry_date, days_to_expiry, futures_price,
     spot_price, basis_pct, annualized_return_pct, open_interest}]}.
     """
+    await ctx.report_progress(0, 3, "Fetching futures data")
     return moex.futures_basis(asset_code)
 
 
@@ -467,30 +513,31 @@ def moex_option_history(secid: str, frm: str | None = None,
 
 # ─────────────────────────── Dividends (smart-lab.ru) ───────────────────────────
 @mcp.tool()
-def smartlab_dividends(limit: int = 50) -> list[dict]:
+async def smartlab_dividends(ctx: Context, limit: int = 50) -> list[dict]:
     """Upcoming dividends calendar from smart-lab.ru.
 
     Returns [{name, ticker, period, dividend_rub, yield_pct, board_approved,
     last_buy_date, close_date, payment_date, price}].
     dividend_rub — ₽ per share; yield_pct — dividend yield %.
     """
+    await ctx.report_progress(0, 2, "Fetching upcoming dividends")
     return smartlab.get_upcoming_dividends(limit)
 
 
 @mcp.tool()
-def smartlab_dividend_history(ticker: str) -> list[dict]:
+async def smartlab_dividend_history(ticker: str, ctx: Context) -> list[dict]:
     """Dividend history by ticker from smart-lab.ru.
 
     Args: ticker — e.g. 'SBER', 'LKOH'.
     Returns [{name, ticker, period, dividend_rub, yield_pct, board_approved,
     last_buy_date, close_date, payment_date, price}].
     """
+    await ctx.report_progress(0, 2, "Fetching dividend history")
     return smartlab.get_dividend_history(ticker)
-
 
 # ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
 @mcp.tool()
-def raexpert_rating(query: str) -> list[dict]:
+async def raexpert_rating(query: str, ctx: Context) -> list[dict]:
     """Credit rating of issuer or bond from Expert RA.
 
     Source: raexpert.ru (updated several times a week, 4h cache).
@@ -503,11 +550,13 @@ def raexpert_rating(query: str) -> list[dict]:
 
     Args: query — issuer or bond name ('Сбербанк', 'ЛУКОЙЛ', 'ГТЛК', 'Атомэнергопром'). Case-insensitive.
     """
+    await ctx.report_progress(0, 2, "Searching Expert RA ratings")
     return raexpert.rating_search(query)
 
 
 @mcp.tool()
-def raexpert_emitent_ratings(
+async def raexpert_emitent_ratings(
+    ctx: Context,
     rating_min: str | None = None,
     sector: str | None = None,
 ) -> list[dict]:
@@ -536,12 +585,14 @@ def raexpert_emitent_ratings(
     Returns [{name, rating, outlook, date, category, sector?, agency}].
     Results sorted by rating (best first), then by name.
     """
+    await ctx.report_progress(0, 2, "Fetching emitent ratings")
     return raexpert.emitent_rating_search(rating_min=rating_min, sector=sector)
 
 
 # ─────────────────────────── ZPIF payments (vsezpif.ru) ───────────────────────────
 @mcp.tool()
-def zpif_payments(
+async def zpif_payments(
+    ctx: Context,
     fund_name: str | None = None,
     isin: str | None = None,
     limit: int = 50,
@@ -562,6 +613,7 @@ def zpif_payments(
        next_payment: {date_iso, fund_name, amount},
        funds_total: int}.
     """
+    await ctx.report_progress(0, 2, "Fetching ZPIF payment calendar")
     if fund_name or isin:
         payments = vsezpif.get_payments_by_fund(
             fund_name=fund_name,
@@ -667,7 +719,7 @@ def cbr_inflation(first_date: str | None = None, last_date: str | None = None,
 
 # ─────────────────────────── Bond math ───────────────────────────
 @mcp.tool()
-def bond_report(query: str) -> dict:
+async def bond_report(query: str, ctx: Context) -> dict:
     """Deep bond analysis: metrics + rate scenarios + spread to curve + convexity.
 
     Args: query — OFZ number/ISIN.
@@ -679,10 +731,12 @@ def bond_report(query: str) -> dict:
     gry — gross redemption yield (YTM + accrued).
     real_return — yield vs CPI (Rosstat) + scenarios under different assumptions.
     """
+    await ctx.report_progress(0, 5, "Fetching bond data")
     b = moex.bond(query)
     rep: dict = {"bond": b}
     freq = _freq_from_coupon_period(b.get("coupon_period_days"))
 
+    await ctx.report_progress(1, 5, "Fetching coupon schedule")
     try:
         coupon_schedule = moex.future_bond_coupons(query)
     except Exception:  # noqa: BLE001
@@ -690,6 +744,7 @@ def bond_report(query: str) -> dict:
     if coupon_schedule:
         rep["coupon_schedule"] = coupon_schedule
 
+    await ctx.report_progress(2, 5, "Fetching inflation data")
     try:
         infl_data = cbr.inflation(tail=1)
         actual_inflation = infl_data.get("latest_inflation")
@@ -718,6 +773,7 @@ def bond_report(query: str) -> dict:
         if cs and gry_result.get("gry_pct"):
             ytm = gry_result["gry_pct"]
 
+    await ctx.report_progress(3, 5, "Computing scenarios")
     if mat and ytm:
         rep["convexity"] = bonds.convexity(
             date.today(), mat, c_pct, ytm, b.get("face_value") or 1000, freq,
@@ -739,6 +795,7 @@ def bond_report(query: str) -> dict:
             mat, c_pct, ytm, dur, today=str(date.today()), freq=freq,
             coupon_schedule=cs)
 
+    await ctx.report_progress(4, 5, "Computing spread to curve")
     if dur and ytm:
         try:
             cy = rate.curve_yield(dur)
@@ -766,7 +823,7 @@ def bond_accrued_interest(query: str) -> dict:
 
 
 @mcp.tool()
-def bond_synthetic_yield(query: str, horizon_years: float,
+async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
                          reinvest_rate: float | None = None) -> dict:
     """Synthetic yield with coupon reinvestment over investment horizon.
 
@@ -788,10 +845,12 @@ def bond_synthetic_yield(query: str, horizon_years: float,
     irr_pct — annualized internal rate of return of the full strategy.
     Comparison with ytm_pct shows the impact of reinvestment assumptions.
     """
+    await ctx.report_progress(0, 3, "Fetching bond data")
     b = moex.bond(query)
     if not b.get("maturity") or b.get("coupon_pct") is None or not b.get("ytm"):
         return {"error": "insufficient bond data (need maturity, coupon, ytm)"}
     freq = _freq_from_coupon_period(b.get("coupon_period_days"))
+    await ctx.report_progress(1, 3, "Fetching coupon schedule")
     try:
         cs = moex.future_bond_coupons(query)
     except Exception:  # noqa: BLE001
@@ -808,7 +867,7 @@ def bond_synthetic_yield(query: str, horizon_years: float,
 
 
 @mcp.tool()
-def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dict:
+async def price_volatility(query: str, ctx: Context, days: int = 90, rf_annual: float = 16.0) -> dict:
     """Volatility, Sharpe ratio, max drawdown from daily candles.
 
     Args: query (ticker), days (default 90), rf_annual (risk-free rate, % annualized).
@@ -816,11 +875,12 @@ def price_volatility(query: str, days: int = 90, rf_annual: float = 16.0) -> dic
     total_return_pct, high_price, low_price, trading_days, ...}.
     sharpe = (mean_excess_return / volatility) * sqrt(252).
     """
+    await ctx.report_progress(0, 2, "Fetching candle data")
     return moex.price_volatility(query, days, rf_annual)
 
 
 @mcp.tool()
-def liquidity_assessment(query: str, days: int = 90) -> dict:
+async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict:
     """Liquidity assessment: Amihud illiquidity, spread, turnover, score 0-10.
 
     Args: query (ticker/ISIN), days (default 90).
@@ -830,12 +890,13 @@ def liquidity_assessment(query: str, days: int = 90) -> dict:
     A (≥8) = very liquid, E (<2) = minimal. amihud_bps_per_mln = mean(|r_t|/V_t) × 10^10.
     Spread: Corwin-Schultz from OHLC + actual bid/ask.
     """
+    await ctx.report_progress(0, 2, "Fetching market data")
     return moex.liquidity(query, days)
 
 
 # ─────────────────────────── Rate expectations (OFZ G-curve) ───────────────────────────
 @mcp.tool()
-def rate_expectations(key_rate: float | None = None) -> dict:
+async def rate_expectations(ctx: Context, key_rate: float | None = None) -> dict:
     """Market rate expectations from OFZ G-curve. Numbers only.
 
     Args: key_rate (optional, defaults to cbr_key_rate).
@@ -845,6 +906,7 @@ def rate_expectations(key_rate: float | None = None) -> dict:
     inverted, machine label read (cuts_priced|hikes_priced|flat).
     Portfolio interpretation is done by the client/agent.
     """
+    await ctx.report_progress(0, 3, "Fetching G-curve data")
     return rate.rate_expectations(key_rate)
 
 
@@ -859,7 +921,7 @@ def curve_yield(years: float) -> dict:
 
 # ─────────────────────────── Portfolio (domain reports) ───────────────────────────
 @mcp.tool()
-def portfolio_snapshot(assets: str) -> dict:
+async def portfolio_snapshot(assets: str, ctx: Context) -> dict:
     """Portfolio snapshot: value, P&L, positions, allocation, rate risk,
     income stream, dividend yield, real return.
 
@@ -872,30 +934,34 @@ def portfolio_snapshot(assets: str) -> dict:
     income_risk — real portfolio return (running_yield − Rosstat CPI;
     if CPI unavailable — key rate as proxy).
     """
+    await ctx.report_progress(0, 3, "Fetching inflation data")
     try:
         infl_data = cbr.inflation(tail=1)
         inflation_pct = infl_data.get("latest_inflation")
     except Exception:  # noqa: BLE001
         inflation_pct = None
+    await ctx.report_progress(1, 3, "Building portfolio snapshot")
     return portfolio.snapshot(assets, inflation_pct=inflation_pct)
 
 
 @mcp.tool()
-def portfolio_rate_whatif(delta_pp: float, assets: str) -> dict:
+async def portfolio_rate_whatif(delta_pp: float, assets: str, ctx: Context) -> dict:
     """Portfolio impact of delta_pp percentage point shift in bond yields.
 
     Args: delta_pp (e.g. -1, +2); assets — markdown portfolio (same as portfolio_snapshot).
     Returns: value change (RUB and %) + bond-by-bond breakdown.
     """
+    await ctx.report_progress(0, 2, "Computing rate scenario")
     return portfolio.rate_whatif(delta_pp, assets)
 
 
 @mcp.tool()
-def portfolio_income_calendar(assets: str) -> dict:
+async def portfolio_income_calendar(assets: str, ctx: Context) -> dict:
     """Upcoming income: next coupon per bond + declared dividends.
 
     Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
+    await ctx.report_progress(0, 2, "Fetching income calendar")
     return portfolio.income_calendar(assets)
 
 
