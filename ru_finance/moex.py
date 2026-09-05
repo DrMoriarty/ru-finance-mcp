@@ -83,6 +83,15 @@ _UNDERLYING_MAP: dict[str, dict] = {
 }
 
 
+def _canonical_asset(code: str) -> str:
+    """Нормализовать asset_code к каноническому регистру из _UNDERLYING_MAP."""
+    upper = code.upper()
+    for k in _UNDERLYING_MAP:
+        if k.upper() == upper:
+            return k
+    return code
+
+
 def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
     """Определить спот-цену базового актива futures-контракта.
 
@@ -129,11 +138,10 @@ def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
         pass
 
     # --- Фоллбэк: options_assets (spot from FORTS options underlying) ---
-
-    # --- Фоллбэк: options_assets (spot from FORTS options) ---
     try:
+        ac_upper = asset_code.upper()
         for oa in options_assets():
-            if oa.get("asset") == asset_code:
+            if (oa.get("asset") or "").upper() == ac_upper:
                 p = oa.get("asset_last_price")
                 if p is not None:
                     return float(p), f"options_asset:{asset_code}"
@@ -1181,11 +1189,11 @@ def indicative_rates(frm: str | None = None,
 
 # ─────────────────── Срочный рынок (фьючерсы / опционы) ───────────────────
 
-def futures_list(asset_code: str | None = None) -> list[dict]:
+def futures_list(asset_code: str) -> list[dict]:
     """Каталог фьючерсных контрактов с рыночными данными и спецификацией.
 
     Вход: asset_code — код базисного актива (напр. 'Si', 'RTS', 'BR', 'GAZR').
-          Без параметра — все торгуемые контракты.
+          Регистр не важен ('si' == 'SI' == 'Si').
     Возвращает: [{secid, name, asset_code, expiry_date, lot_volume, min_step,
     step_price, initial_margin, prev_settle_price, last_settle_price,
     open_interest, prev_price, oichange, bid, offer, last, high, low,
@@ -1198,9 +1206,10 @@ def futures_list(asset_code: str | None = None) -> list[dict]:
     mds = records(raw_securities, "marketdata")
     md_by_id = {r["SECID"]: r for r in mds}
 
+    ac_upper = asset_code.upper()
     rows = []
     for s in secs:
-        if asset_code and s.get("ASSETCODE") != asset_code:
+        if (s.get("ASSETCODE") or "").upper() != ac_upper:
             continue
         md = md_by_id.get(s["SECID"], {})
         rows.append({
@@ -1288,7 +1297,8 @@ def futures_series(asset: str | None = None) -> list[dict]:
                   {"limit": 500})
     rows = records(raw, "series")
     if asset:
-        rows = [r for r in rows if r.get("asset_code") == asset]
+        ac_upper = asset.upper()
+        rows = [r for r in rows if (r.get("asset_code") or "").upper() == ac_upper]
     today = str(__import__("datetime").date.today())
     for r in rows:
         r["is_expired"] = (r.get("expiration_date") or "") < today
@@ -1318,6 +1328,7 @@ def futures_basis(asset_code: str) -> dict:
     """
     from datetime import date as _date, datetime as _dt
 
+    asset_code = _canonical_asset(asset_code)
     contracts = futures_list(asset_code)
     if not contracts:
         return {"asset_code": asset_code, "error": "нет контрактов"}

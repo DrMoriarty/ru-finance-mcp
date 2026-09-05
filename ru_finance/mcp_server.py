@@ -344,10 +344,10 @@ def moex_indicative_rates(frm: str | None = None,
 
 # ───────────────────── Derivatives (futures / options) ─────────────────────
 @mcp.tool()
-def moex_futures_list(asset_code: str | None = None) -> list[dict]:
+def moex_futures_list(asset_code: str) -> list[dict]:
     """FORTS futures contracts catalog with market data and spec.
 
-    Args: asset_code — underlying (e.g. 'Si', 'RTS', 'BR', 'GAZR'). None → all traded.
+    Args: asset_code — underlying (e.g. 'Si', 'RTS', 'BR', 'GAZR'). Case-insensitive.
     Returns [{secid, name, asset_code, expiry_date, lot_volume, min_step,
     step_price, initial_margin, last_settle_price, open_interest, oichange,
     bid, offer, last, high, low, volume_today, value_today, ...}].
