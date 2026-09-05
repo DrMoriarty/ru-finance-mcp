@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 import requests as _requests
 
@@ -443,8 +444,36 @@ def future_bond_coupons(query: str) -> list[dict]:
     return sorted(out, key=lambda x: x["date"])
 
 
-def candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
-    """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв)."""
+_CANDLE_INTERVALS = [
+    ("24", 1),    # день
+    ("7",  7),    # неделя
+    ("31", 30),   # месяц
+    ("4",  91),   # квартал
+]
+
+
+def _auto_interval(frm: str, till: str) -> str:
+    d0 = datetime.fromisoformat(frm)
+    d1 = datetime.fromisoformat(till)
+    days = (d1 - d0).days
+    if days <= 0:
+        return "60"
+    target = days / 50
+    for iv, step in reversed(_CANDLE_INTERVALS):
+        if target >= step:
+            return iv
+    return "24"
+
+
+def candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
+    """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
+
+    Пустой query — ошибка. Пустой interval — авто-выбор (≤50 свечей).
+    """
+    if not query or not query.strip():
+        raise ValueError("moex_candles: query не может быть пустым")
+    if not interval:
+        interval = _auto_interval(frm, till)
     r = resolve(query)
     raw = exec_template(T_CANDLES, {
         "engine": r["engine"], "market": r["market"],

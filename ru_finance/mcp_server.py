@@ -207,10 +207,11 @@ def moex_bond_coupons(query: str) -> list[dict]:
 
 
 @mcp.tool()
-def moex_candles(query: str, frm: str, till: str, interval: str = "24") -> list[dict]:
+def moex_candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
     """OHLCV candles for a period.
 
-    Args: query; interval: 1,10,60(hour),24(day),7(week),31(month),4(quarter).
+    Args: query (required, non-empty); interval: 1,10,60(hour),24(day),
+    7(week),31(month),4(quarter); empty=auto-select (≤50 candles).
     frm/till ('YYYY-MM-DD').
     Returns [{begin, open, high, low, close, value, volume}].
     """
@@ -1095,19 +1096,21 @@ def ref_cbr_currencies() -> dict:
 @mcp.resource(
     "ref://candle-intervals",
     name="candle_intervals",
-    description="All valid interval codes for moex_candles: "
-                "1 (min), 10, 60 (hour), 24 (day, default), 7 (week), 31 (month).",
+    description="All valid interval codes for moex_candles. "
+                "Empty string = auto-select (≤50 candles).",
     mime_type="application/json",
 )
 def ref_candle_intervals() -> dict:
     return {
         "intervals": [
+            {"code": "",   "label": "auto (≤50 candles)"},
             {"code": "1",  "label": "1 minute",  "minutes": 1},
             {"code": "10", "label": "10 minutes", "minutes": 10},
             {"code": "60", "label": "1 hour",     "minutes": 60},
-            {"code": "24", "label": "1 day",      "minutes": 1440, "default": True},
+            {"code": "24", "label": "1 day",      "minutes": 1440},
             {"code": "7",  "label": "1 week",     "minutes": 10080},
             {"code": "31", "label": "1 month",    "minutes": 44640},
+            {"code": "4",  "label": "1 quarter",  "minutes": 133920},
         ],
     }
 
