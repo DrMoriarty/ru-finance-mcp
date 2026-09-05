@@ -1368,11 +1368,7 @@ def futures_basis(asset_code: str) -> dict:
 
         lot = c.get("lot_volume") or 1
 
-        ratio = float(settle) / spot_price if spot_price else 0
-        if ratio > 10:
-            settle_per_unit = float(settle) / lot if lot != 0 else float(settle)
-        else:
-            settle_per_unit = float(settle)
+        settle_per_unit = float(settle) / lot if lot != 0 else float(settle)
         ann = (settle_per_unit / spot_price - 1) * 36500.0 / days
         data.append({
             "secid": c["secid"], "name": c.get("name"),
