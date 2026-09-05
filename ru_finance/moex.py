@@ -20,7 +20,7 @@ T_SPEC = 193     # /securities/{security}                       (специфи�
 T_QUOTE_BOARD = 359   # /engines/.../boards/{board}/securities/{security}
 T_QUOTE_MARKET = 347  # /engines/.../markets/{market}/securities/{security}
 T_CANDLES = 409  # .../boards/{board}/securities/{security}/candles
-T_HISTORY = 531  # /history/.../boards/{board}/securities/{security}
+T_HISTORY = 439  # /history/engines/{engine}/markets/{market}/securities/{security}
 
 # суффикс группы ISS -> рыночный код market
 _MARKET = {
@@ -458,7 +458,7 @@ def history(query: str, frm: str, till: str) -> list[dict]:
     r = resolve(query)
     raw = exec_template(T_HISTORY, {
         "engine": r["engine"], "market": r["market"],
-        "board": r["board"], "security": r["secid"]},
+        "security": r["secid"]},
         {"from": frm, "till": till})
     return records(raw, "history")
 
