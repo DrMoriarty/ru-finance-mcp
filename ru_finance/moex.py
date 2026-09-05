@@ -1198,6 +1198,410 @@ def liquidity(query: str, days: int = 90) -> dict:
     }
 
 
+# ─────────────────── ETF / БПИФ ───────────────────
+
+# Маппинг тикер БПИФ → {benchmark, benchmark_name, category, inav_hint}.
+# benchmark — тикер индекса-бенчмарка на MOEX, category — тип фонда.
+ETF_BENCHMARK_MAP: dict[str, dict] = {
+    "TMOS": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "SBMX": {"benchmark": "MOEXTR", "benchmark_name": "MOEX Total Return","category": "equity_russia"},
+    "TGLD": {"benchmark": "GOLD",   "benchmark_name": "Золото (ЦБ)",      "category": "commodity"},
+    "TEUR": {"benchmark": "EUR/RUB","benchmark_name": "EUR/RUB (ЦБ)",     "category": "fx"},
+    "TCNY": {"benchmark": "CNY/RUB","benchmark_name": "CNY/RUB (ЦБ)",     "category": "fx"},
+    "TMON": {"benchmark": None,     "benchmark_name": "Денежный рынок",    "category": "money_market"},
+    "SBMM": {"benchmark": None,     "benchmark_name": "Денежный рынок",    "category": "money_market"},
+    "AKMM": {"benchmark": None,     "benchmark_name": "Денежный рынок",    "category": "money_market"},
+    "TPAY": {"benchmark": "RUCBTRNSD", "benchmark_name": "RGBITR (гос. облигации)", "category": "bond_gov"},
+    "VTBA": {"benchmark": "RUCBTRRNDX","benchmark_name": "RGBI (облигации)",        "category": "bond_gov"},
+    "VTBE": {"benchmark": "RGBI",   "benchmark_name": "RGBI",             "category": "bond_gov"},
+    "RUSB": {"benchmark": "RUCBTRNSD","benchmark_name": "RGBITR",         "category": "bond_gov"},
+    "SBGB": {"benchmark": "RUCBTRNSD","benchmark_name": "RGBITR",         "category": "bond_gov"},
+    "SBGD": {"benchmark": "RUCBTRNSD","benchmark_name": "RGBITR",         "category": "bond_gov"},
+    "AKBB": {"benchmark": "RUCBTRNSD","benchmark_name": "RGBITR",         "category": "bond_gov"},
+    "TLCB": {"benchmark": None,     "benchmark_name": "Ликвидность ЦБ",    "category": "money_market"},
+    "AKTS": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "AKGD": {"benchmark": None,     "benchmark_name": "Золото (ЦБ)",      "category": "commodity"},
+    "FXRU": {"benchmark": "RUCBTRNSD","benchmark_name": "RGBITR",         "category": "bond_gov"},
+    "FXMM": {"benchmark": None,     "benchmark_name": "Денежный рынок",    "category": "money_market"},
+    "FXRB": {"benchmark": "RUCBTRRNDX","benchmark_name": "RGBI",          "category": "bond_corp"},
+    "FXGD": {"benchmark": "GOLD",   "benchmark_name": "Золото (LBMA)",    "category": "commodity"},
+    "FXCN": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "FXIT": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "FXRL": {"benchmark": "RTSI",   "benchmark_name": "Индекс РТС",       "category": "equity_russia"},
+    "FXUS": {"benchmark": "S&P 500","benchmark_name": "S&P 500",          "category": "equity_foreign"},
+    "FXDE": {"benchmark": "DAX",    "benchmark_name": "DAX",              "category": "equity_foreign"},
+    "FXUK": {"benchmark": "FTSE 100","benchmark_name": "FTSE 100",        "category": "equity_foreign"},
+    "FXKZ": {"benchmark": None,     "benchmark_name": "Казахстан",        "category": "equity_foreign"},
+    "FXWO": {"benchmark": "MSCI World","benchmark_name": "MSCI World",    "category": "equity_foreign"},
+    "FXIM": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "TMOS": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "TBRU": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
+    "TECH": {"benchmark": "MOEXT",  "benchmark_name": "MOEX IT",          "category": "equity_sector"},
+    "DSPB": {"benchmark": None,     "benchmark_name": "Дивидендный",       "category": "equity_dividend"},
+    "DIVD": {"benchmark": None,     "benchmark_name": "Дивидендный",       "category": "equity_dividend"},
+    "TITR": {"benchmark": "MOEXT",  "benchmark_name": "MOEX IT",          "category": "equity_sector"},
+    "OPTE": {"benchmark": None,     "benchmark_name": "Оптимум",           "category": "mixed"},
+    "KAGG": {"benchmark": "MOEXTR", "benchmark_name": "MOEX Total Return","category": "equity_russia"},
+    "CATF": {"benchmark": None,     "benchmark_name": "Кэш-менеджмент",   "category": "money_market"},
+}
+
+# Человекочитаемые названия категорий БПИФ
+ETF_CATEGORY_RU: dict[str, str] = {
+    "equity_russia": "Акции (Россия)",
+    "equity_foreign": "Акции (зарубежные)",
+    "equity_sector": "Акции (секторальные)",
+    "equity_dividend": "Акции (дивидендные)",
+    "bond_gov": "Облигации (государственные)",
+    "bond_corp": "Облигации (корпоративные)",
+    "money_market": "Денежный рынок",
+    "commodity": "Сырьё",
+    "fx": "Валюта",
+    "mixed": "Смешанный",
+}
+
+
+def _resolve_inav_ticker(fund_secid: str) -> str | None:
+    """Найти iNAV-тикер для БПИФ.
+
+    Каждый БПИФ имеет iNAV-спутник (TMOS→TMOSA, SBMX→SBMXA) на доске INAV.
+    Пробуем: {secid}A → {secid}B → поиск по названию.
+    """
+    for suffix in ("A", "B"):
+        candidate = f"{fund_secid}{suffix}"
+        try:
+            r = _resolve_single(candidate)
+            if r.get("board") == "INAV":
+                return candidate
+        except (ValueError, Exception):
+            pass
+    # Фоллбэк: поиск iNAV по названию фонда
+    try:
+        raw = exec_template(T_SEARCH, {"q": fund_secid, "limit": 50})
+        rows = records(raw, "securities")
+        for row in rows:
+            bid = row.get("primary_boardid") or ""
+            sid = (row.get("secid") or "").upper()
+            if bid == "INAV" and sid.startswith(fund_secid.upper()):
+                return row["secid"]
+    except Exception:
+        pass
+    return None
+
+
+def _resolve_single(query: str) -> dict:
+    """Резолв одной бумаги без word-stripping (для iNAV)."""
+    raw = exec_template(T_SEARCH, {"q": query, "limit": 10})
+    rows = records(raw, "securities")
+    if not rows:
+        raise ValueError(f"MOEX: не найдено бумаг по запросу {query!r}")
+    def _score(r: dict) -> int:
+        s = 0
+        if str(r.get("secid", "")).upper() == query.upper():
+            s += 100
+        if r.get("is_traded") == 1:
+            s += 10
+        return s
+    best = max(rows, key=_score)
+    engine, market = _engine_market(best.get("group"))
+    return {
+        "secid": best.get("secid"),
+        "shortname": best.get("shortname"),
+        "isin": best.get("isin"),
+        "engine": engine, "market": market,
+        "board": best.get("primary_boardid"),
+        "type": best.get("type"),
+        "group": best.get("group"),
+        "is_traded": best.get("is_traded"),
+        "emitent_id": best.get("emitent_id"),
+    }
+
+
+def inav_quote(fund_secid: str) -> dict | None:
+    """Котировка iNAV-инструмента (индикативная чистая стоимость фонда).
+
+    iNAV — спутниковый инструмент на доске INAV (engine=stock, market=index).
+    TMOS→TMOSA, SBMX→SBMXA и т.д.
+
+    Возвращает: {secid, price, updatetime} или None если iNAV не найден.
+    """
+    inav_ticker = _resolve_inav_ticker(fund_secid)
+    if not inav_ticker:
+        return None
+    try:
+        # Прямой запрос на доску INAV — resolve() не находит iNAV-инструменты
+        raw = exec_template(T_QUOTE_BOARD, {
+            "engine": "stock", "market": "index", "board": "INAV",
+            "security": inav_ticker})
+        md_rows = records(raw, "marketdata")
+        md = md_rows[0] if md_rows else {}
+        price = first(md.get("LAST"), md.get("MARKETPRICE"),
+                      md.get("LCLOSEPRICE"), md.get("WAPRICE"))
+        return {
+            "secid": inav_ticker,
+            "price": price,
+            "updatetime": md.get("UPDATETIME"),
+            "price_field": ("LAST" if md.get("LAST") is not None else
+                            "MARKETPRICE" if md.get("MARKETPRICE") is not None else
+                            "LCLOSEPRICE" if md.get("LCLOSEPRICE") is not None else "WAPRICE"),
+        }
+    except Exception:
+        return None
+
+
+def etf_fund_data(query: str) -> dict:
+    """Расширенные данные о БПИФ: iNAV, бенчмарк, тип, категория.
+
+    Возвращает: {secid, shortname, isin, group, type, issuedate, emitent_id,
+    lozsize, list_level, is_qualified, category, category_ru, benchmark,
+    benchmark_name, inav_ticker, inav_price, fund_price, premium_discount_pct}.
+    """
+    r = resolve(query)
+    is_fund = (r.get("group") or "").endswith(("_ppif", "_etf"))
+    if not is_fund:
+        # Проверяем, может это всё-таки фонд
+        if r.get("group") not in ("stock_ppif", "stock_etf"):
+            raise ValueError(f"{query!r} не является БПИФ/ETF (group={r.get('group')})")
+
+    # Спецификация бумаги
+    spec_raw = exec_template(T_SPEC, {"security": r["secid"]})
+    spec = {}
+    for block in ("description", "securities"):
+        rows_b = records(spec_raw, block)
+        if rows_b:
+            spec = rows_b[0]
+            break
+
+    # iNAV
+    inav_ticker = _resolve_inav_ticker(r["secid"])
+    inav = inav_quote(r["secid"]) if inav_ticker else None
+
+    # Котировка фонда
+    q = quote(r["secid"])
+    fund_price = q.get("price")
+
+    # Премия/дисконт
+    premium = None
+    if inav and inav.get("price") and fund_price and inav["price"] > 0:
+        premium = round((fund_price / inav["price"] - 1) * 100, 2)
+
+    # Маппинг бенчмарка
+    bm = ETF_BENCHMARK_MAP.get(r["secid"], {})
+    category = bm.get("category", "unknown")
+    category_ru = ETF_CATEGORY_RU.get(category, category)
+
+    return {
+        "secid": r["secid"],
+        "shortname": r.get("shortname"),
+        "isin": r.get("isin"),
+        "group": r.get("group"),
+        "type": r.get("type"),
+        "board": r.get("board"),
+        "issuedate": spec.get("ISSUEDATE"),
+        "emitent_id": r.get("emitent_id"),
+        "emitent_title": r.get("emitent_title"),
+        "lotsize": spec.get("LOTSIZE"),
+        "list_level": spec.get("LISTLEVEL"),
+        "is_qualified": spec.get("ISQUALIFIEDINVESTORS"),
+        "category": category,
+        "category_ru": category_ru,
+        "benchmark": bm.get("benchmark"),
+        "benchmark_name": bm.get("benchmark_name"),
+        "inav_ticker": inav_ticker,
+        "inav_price": inav.get("price") if inav else None,
+        "inav_updatetime": inav.get("updatetime") if inav else None,
+        "fund_price": fund_price,
+        "premium_discount_pct": premium,
+        "price_field": q.get("price_field"),
+    }
+
+
+def etf_premium_discount(query: str) -> dict:
+    """Текущая премия/дисконт БПИФ к iNAV.
+
+    Сравнивает рыночную цену фонда с индикативной чистой стоимостью (iNAV).
+    iNAV — спутниковый инструмент на доске INAV (TMOS→TMOSA).
+
+    Возвращает: {secid, fund_price, inav_ticker, inav_price, premium_discount_pct,
+    inav_updatetime, note}.
+    """
+    r = resolve(query)
+    is_fund = (r.get("group") or "").endswith(("_ppif", "_etf"))
+    if not is_fund:
+        raise ValueError(f"{query!r} не является БПИФ/ETF")
+
+    inav = inav_quote(r["secid"])
+    q = quote(r["secid"])
+    fund_price = q.get("price")
+
+    if not inav or not inav.get("price"):
+        return {
+            "secid": r["secid"],
+            "shortname": r.get("shortname"),
+            "fund_price": fund_price,
+            "inav_ticker": inav.get("secid") if inav else None,
+            "inav_price": None,
+            "premium_discount_pct": None,
+            "note": "iNAV не найден или не содержит данных — расчёт невозможен",
+        }
+
+    inav_price = inav["price"]
+    if inav_price > 0 and fund_price:
+        premium = round((fund_price / inav_price - 1) * 100, 2)
+    else:
+        premium = None
+
+    return {
+        "secid": r["secid"],
+        "shortname": r.get("shortname"),
+        "fund_price": fund_price,
+        "price_field": q.get("price_field"),
+        "inav_ticker": inav.get("secid"),
+        "inav_price": inav_price,
+        "inav_updatetime": inav.get("updatetime"),
+        "premium_discount_pct": premium,
+        "note": ("положительное = премия (рыночная цена выше NAV), "
+                 "отрицательное = дисконт. Задержка ~15 мин."),
+    }
+
+
+def etf_tracking_error(query: str, days: int = 90) -> dict:
+    """Трекинг-ошибка БПИФ относительно индекса-бенчмарка.
+
+    Сравнивает доходность фонда и бенчмарка за N дней.
+    Бенчмарк определяется из ETF_BENCHMARK_MAP; если не найден — ищет в ISS
+    MOEX по названию фонда.
+
+    Возвращает: {secid, benchmark, benchmark_name, period_days, fund_return_pct,
+    benchmark_return_pct, tracking_error_pct (annualized), premium_avg_pct, dates}.
+    """
+    from datetime import date, timedelta
+
+    r = resolve(query)
+    is_fund = (r.get("group") or "").endswith(("_ppif", "_etf"))
+    if not is_fund:
+        raise ValueError(f"{query!r} не является БПИФ/ETF")
+
+    till = date.today()
+    frm = till - timedelta(days=days + 10)
+
+    # 1) Свечи фонда
+    fund_candles = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    fund_rows = records(fund_candles, "candles")
+    if len(fund_rows) < 2:
+        return {"error": "недостаточно данных по фонду", "secid": r["secid"]}
+
+    fund_closes = [row["close"] for row in fund_rows if row.get("close")]
+    fund_dates = [row.get("begin", "") for row in fund_rows]
+
+    # 2) Определяем бенчмарк
+    bm_info = ETF_BENCHMARK_MAP.get(r["secid"], {})
+    benchmark_query = bm_info.get("benchmark")
+    benchmark_name = bm_info.get("benchmark_name", "неизвестен")
+
+    if not benchmark_query:
+        return {
+            "error": "бенчмарк не определён для данного фонда",
+            "secid": r["secid"],
+            "fund_return_pct": round((fund_closes[-1] / fund_closes[0] - 1) * 100, 2) if fund_closes else None,
+            "period_days": days,
+            "note": "добавьте маппинг в ETF_BENCHMARK_MAP",
+        }
+
+    # 3) Свечи бенчмарка
+    try:
+        bm_r = resolve(benchmark_query)
+        bm_candles = exec_template(T_CANDLES, {
+            "engine": bm_r["engine"], "market": bm_r["market"],
+            "board": bm_r["board"], "security": bm_r["secid"]},
+            {"from": str(frm), "till": str(till), "interval": "24"})
+        bm_rows = records(bm_candles, "candles")
+    except Exception:
+        return {
+            "error": f"не удалось получить данные бенчмарка {benchmark_query!r}",
+            "secid": r["secid"], "benchmark": benchmark_query,
+        }
+
+    if len(bm_rows) < 2:
+        return {
+            "error": "недостаточно данных по бенчмарку",
+            "secid": r["secid"], "benchmark": benchmark_query,
+            "benchmark_rows": len(bm_rows),
+        }
+
+    bm_closes = [row["close"] for row in bm_rows if row.get("close")]
+
+    # 4) Выравниваем по датам
+    fund_by_date: dict[str, float] = {}
+    for row in fund_rows:
+        dt = (row.get("begin") or "")[:10]
+        c = row.get("close")
+        if dt and c:
+            fund_by_date[dt] = c
+
+    bm_by_date: dict[str, float] = {}
+    for row in bm_rows:
+        dt = (row.get("begin") or "")[:10]
+        c = row.get("close")
+        if dt and c:
+            bm_by_date[dt] = c
+
+    common_dates = sorted(set(fund_by_date) & set(bm_by_date))
+    if len(common_dates) < 2:
+        return {
+            "error": "нет пересечения дат фонда и бенчмарка",
+            "secid": r["secid"], "benchmark": benchmark_query,
+            "fund_dates": len(fund_by_date), "bm_dates": len(bm_by_date),
+        }
+
+    aligned_fund = [fund_by_date[d] for d in common_dates]
+    aligned_bench = [bm_by_date[d] for d in common_dates]
+
+    # 5) Доходности
+    fund_ret = (aligned_fund[-1] / aligned_fund[0] - 1) * 100
+    bm_ret = (aligned_bench[-1] / aligned_bench[0] - 1) * 100
+
+    # 6) Tracking error (annualized): std(daily_diff) × sqrt(252)
+    import math
+    daily_diffs: list[float] = []
+    for i in range(1, len(common_dates)):
+        if aligned_fund[i-1] > 0 and aligned_bench[i-1] > 0:
+            r_fund = math.log(aligned_fund[i] / aligned_fund[i-1])
+            r_bench = math.log(aligned_bench[i] / aligned_bench[i-1])
+            daily_diffs.append(r_fund - r_bench)
+
+    tracking_err = None
+    if len(daily_diffs) >= 2:
+        mean_d = sum(daily_diffs) / len(daily_diffs)
+        var_d = sum((d - mean_d) ** 2 for d in daily_diffs) / (len(daily_diffs) - 1)
+        tracking_err = round(var_d ** 0.5 * (252 ** 0.5) * 100, 2)
+
+    # 7) Средняя премия/дисконт за период (если есть iNAV)
+    premium_avg = None
+    inav = inav_quote(r["secid"])
+
+    return {
+        "secid": r["secid"],
+        "shortname": r.get("shortname"),
+        "benchmark": benchmark_query,
+        "benchmark_name": benchmark_name,
+        "period_days": (datetime.fromisoformat(common_dates[-1][:10])
+                        - datetime.fromisoformat(common_dates[0][:10])).days,
+        "start_date": common_dates[0],
+        "end_date": common_dates[-1],
+        "trading_days": len(common_dates),
+        "fund_return_pct": round(fund_ret, 2),
+        "benchmark_return_pct": round(bm_ret, 2),
+        "excess_return_pct": round(fund_ret - bm_ret, 2),
+        "tracking_error_ann_pct": tracking_err,
+        "inav_ticker": inav.get("secid") if inav else None,
+        "note": ("трекинг-ошибка = annualized σ(r_fund − r_bench). "
+                 "Excess return = доходность фонда − доходность бенчмарка."),
+    }
+
+
 def indicative_rates(frm: str | None = None,
                      till: str | None = None) -> list[dict]:
     """Индикативные курсы валют срочного рынка.

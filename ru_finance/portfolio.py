@@ -77,6 +77,9 @@ def parse_assets(assets_text: str) -> list[dict]:
 
 
 def _classify(pos: dict, info: dict) -> str:
+    _BOND_FUND_CATS = {"bond_gov", "bond_corp"}
+    _COMMODITY_CATS = {"commodity"}
+    _FX_CATS = {"fx"}
     if _MM.search(pos["name"]):
         return "money_market"
     if info["is_bond"]:
@@ -89,6 +92,17 @@ def _classify(pos: dict, info: dict) -> str:
         return "corp_bond"
     if info.get("type") in ("common_share", "preferred_share"):
         return "equity"
+    # БПИФ/ETF: классифицируем по категории из ETF_BENCHMARK_MAP
+    secid = str(info.get("secid", ""))
+    etf_cat = moex.ETF_BENCHMARK_MAP.get(secid, {}).get("category", "")
+    if etf_cat == "money_market":
+        return "money_market"
+    if etf_cat in _BOND_FUND_CATS:
+        return "bond_fund"
+    if etf_cat in _COMMODITY_CATS:
+        return "commodity"
+    if etf_cat in _FX_CATS:
+        return "fx_fund"
     return "fund_eq"
 
 
@@ -96,6 +110,8 @@ _CLASS_RU = {
     "ofz_long": "Длинные ОФЗ", "ofz_short": "Короткие/средние ОФЗ",
     "corp_bond": "Корп. облигации", "equity": "Акции (прямые)",
     "fund_eq": "Фонды акций", "money_market": "Денежный рынок",
+    "bond_fund": "Облигационные фонды", "commodity": "Сырьевые фонды",
+    "fx_fund": "Валютные фонды",
 }
 
 

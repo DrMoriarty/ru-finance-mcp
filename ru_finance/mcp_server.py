@@ -39,6 +39,7 @@ ROLES: dict[str, set[str]] = {
         "moex_search_endpoints", "moex_query",
         "smartlab_dividends", "smartlab_dividend_history",
         "price_volatility", "liquidity_assessment",
+        "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
     },
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
@@ -998,6 +999,51 @@ async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict
     return moex.liquidity(query, days)
 
 
+# ─────────────────────────── ETF / БПИФ ───────────────────────────
+@mcp.tool()
+async def etf_fund_info(query: str, ctx: Context) -> dict:
+    """ETF/БПИФ information: iNAV, benchmark, category, premium to NAV.
+
+    Args: query — ticker ('TMOS', 'SBMX', 'TGLD', 'TMON').
+    Returns: {secid, shortname, isin, group, type, issuedate, emitent_id,
+    category, category_ru, benchmark, benchmark_name,
+    inav_ticker, inav_price, fund_price, premium_discount_pct, ...}.
+    premium_discount_pct > 0 = premium (market > NAV), < 0 = discount.
+    iNAV — indicative intraday NAV from companion instrument on INAV board.
+    """
+    await ctx.report_progress(0, 2, "Fetching fund data")
+    return moex.etf_fund_data(query)
+
+
+@mcp.tool()
+async def etf_premium_discount(query: str, ctx: Context) -> dict:
+    """ETF/БПИФ premium or discount to iNAV (indicative NAV).
+
+    Args: query — ticker ('TMOS', 'SBMX', 'TGLD').
+    Returns: {secid, fund_price, inav_ticker, inav_price, premium_discount_pct, ...}.
+    Positive = premium (market price > NAV), negative = discount.
+    iNAV comes from companion instrument (TMOS→TMOSA) on INAV board.
+    """
+    await ctx.report_progress(0, 1, "Fetching iNAV")
+    return moex.etf_premium_discount(query)
+
+
+@mcp.tool()
+async def etf_tracking_error(query: str, ctx: Context, days: int = 90) -> dict:
+    """ETF/БПИФ tracking error vs benchmark index over N days.
+
+    Args: query — fund ticker ('TMOS', 'SBMX', 'TGLD', 'TPAY');
+          days — lookback period (default 90).
+    Returns: {secid, benchmark, benchmark_name, fund_return_pct,
+    benchmark_return_pct, excess_return_pct, tracking_error_ann_pct, dates, ...}.
+    tracking_error_ann_pct — annualized σ(r_fund − r_bench), %.
+    excess_return_pct — fund return minus benchmark return over period.
+    Benchmark is auto-detected from ETF_BENCHMARK_MAP.
+    """
+    await ctx.report_progress(0, 2, "Fetching fund + benchmark data")
+    return moex.etf_tracking_error(query, days)
+
+
 # ─────────────────────────── Rate expectations (OFZ G-curve) ───────────────────────────
 @mcp.tool()
 async def rate_expectations(ctx: Context, key_rate: float | None = None) -> dict:
@@ -1197,6 +1243,25 @@ def ref_candle_intervals() -> dict:
             {"code": "31", "label": "1 month",    "minutes": 44640},
             {"code": "4",  "label": "1 quarter",  "minutes": 133920},
         ],
+    }
+
+
+@mcp.resource(
+    "ref://etf-benchmarks",
+    name="etf_benchmarks",
+    description="Mapping БПИФ ticker → benchmark index + category. "
+                "Use in etf_tracking_error. Categories: equity_russia, equity_foreign, "
+                "equity_sector, bond_gov, bond_corp, money_market, commodity, fx, mixed. "
+                "Covers ~30 major Russian ETFs/БПИФ on MOEX.",
+    mime_type="application/json",
+)
+def ref_etf_benchmarks() -> dict:
+    return {
+        "mapping": {
+            t: {**v, "category_ru": moex.ETF_CATEGORY_RU.get(v.get("category", ""), v.get("category", ""))}
+            for t, v in moex.ETF_BENCHMARK_MAP.items()
+        },
+        "categories": moex.ETF_CATEGORY_RU,
     }
 
 

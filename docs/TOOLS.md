@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-53 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+62 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -375,6 +375,43 @@ MIACR — фактические средневзвешенные ставки �
   - `grade` — `A` (отличная) ≥8, `B` (хорошая) ≥6, `C` (умеренная) ≥4, `D` (низкая) ≥2, `E` (<2).
 - **Пример:** `liquidity_assessment("SBER")` → `{"secid":"SBER","avg_daily_turnover_rub":9038700000,"amihud_bps_per_mln":0.02,"spread":0.053,"composite_score":9.7,"grade":"A",...}`
 - **Использование:** сравнение ликвидности бумаг; при large-cap score ≥8 (grade A) стакан плотный; score <4 (grade D-E) — сложность входа/выхода при крупных позициях.
+
+---
+
+## ETF / БПИФ
+
+Анализ биржевых паевых инвестиционных фондов (БПИФ) на MOEX. Каждый БПИФ
+имеет iNAV-спутник (TMOS→TMOSA) — инструмент на доске `INAV` с
+индикативной чистой стоимостью фонда. iNAV доступен только в торговые часы.
+
+### 🧮 `etf_fund_info(query)`
+Информация о БПИФ: iNAV, бенчмарк, категория, премия к NAV.
+- **Принимает:** `query` — тикер (`"TMOS"`, `"SBMX"`, `"TGLD"`, `"TMON"`).
+- **Возвращает:** `{secid, shortname, isin, group, type, issuedate, emitent_id, emitent_title, category, category_ru, benchmark, benchmark_name, inav_ticker, inav_price, inav_updatetime, fund_price, premium_discount_pct}`.
+  - `category`: `equity_russia`, `equity_foreign`, `equity_sector`, `bond_gov`, `bond_corp`, `money_market`, `commodity`, `fx`, `mixed`;
+  - `inav_price` — индикативная NAV с доски INAV (только в торговые часы);
+  - `premium_discount_pct` — премия/дисконт: `> 0` = премия (рыночная цена выше NAV), `< 0` = дисконт.
+- **Пример:** `etf_fund_info("TMOS")` → `{"secid":"TMOS","category":"equity_russia","benchmark":"IMOEX","benchmark_name":"Индекс МосБиржи","inav_ticker":"TMOSA","fund_price":5.65,"emitent_title":"Т-Капитал",...}`
+- **Использование:** понять тип фонда, бенчмарк для сравнения, текущую премию/дисконт.
+
+### 🧮 `etf_premium_discount(query)`
+Текущая премия/дисконт БПИФ к iNAV (индикативная чистая стоимость).
+- **Принимает:** `query` — тикер (`"TMOS"`, `"SBMX"`, `"TGLD"`).
+- **Возвращает:** `{secid, fund_price, inav_ticker, inav_price, premium_discount_pct, inav_updatetime, note}`.
+  - `premium_discount_pct` > 0 = премия, < 0 = дисконт;
+  - `inav_price` = `None` вне торговых часов.
+- **Пример:** `etf_premium_discount("TMOS")` → `{"secid":"TMOS","fund_price":5.65,"inav_ticker":"TMOSA","inav_price":5.63,"premium_discount_pct":0.36,...}`
+- **⚠️ iNAV:** данные только во время торгов (09:50–18:40 МСК). Вне сессии `inav_price` = `null`.
+
+### 🧮 `etf_tracking_error(query, days=90)`
+Трекинг-ошибка БПИФ относительно индекса-бенчмарка за N дней.
+- **Принимает:** `query` — тикер фонда; `days` — период (90 по умолчанию).
+- **Возвращает:** `{secid, benchmark, benchmark_name, period_days, fund_return_pct, benchmark_return_pct, excess_return_pct, tracking_error_ann_pct, trading_days, start_date, end_date}`.
+  - `tracking_error_ann_pct` — annualized σ(r_fund − r_bench), %;
+  - `excess_return_pct` — доходность фонда минус доходность бенчмарка за период.
+  - Бенчмарк определяется автоматически из маппинга (TMOS→IMOEX, SBMX→MOEXTR, TGLD→GOLD...).
+- **Пример:** `etf_tracking_error("TMOS", 90)` → `{"secid":"TMOS","benchmark":"IMOEX","fund_return_pct":2.17,"benchmark_return_pct":-2.80,"excess_return_pct":4.97,"tracking_error_ann_pct":18.12,...}`
+- **Использование:** оценка качества слежения за индексом; высокий tracking error может указывать на дивидендные распределения, ребалансировку или отсутствие полного совпадения с индексом.
 
 ---
 
