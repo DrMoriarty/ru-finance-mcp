@@ -2,7 +2,10 @@
 
 Запуск локально (stdio):   python -m ru_finance.mcp_server
 Запуск как remote (HTTP):  MCP_TRANSPORT=streamable-http MCP_PORT=8000 python -m ru_finance.mcp_server
-  → эндпоинт http://MCP_HOST:MCP_PORT/mcp  (за nginx/TLS, см. deploy/).
+  → все инструменты:        http://MCP_HOST:MCP_PORT/mcp
+  → роль-specific:          http://MCP_HOST:MCP_PORT/{role}/mcp
+    роли: market, bond, macro, portfolio, derivatives
+  (за nginx/TLS, см. deploy/).
 Все инструменты generic — конкретные бумаги передаются параметром (portfolio_* → assets).
 Документация ручек: docs/TOOLS.md. Гайд для агента: AGENTS.md.
 """
@@ -20,6 +23,88 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
 from . import bonds, cbr, moex, portfolio, raexpert, rate, smartlab, vsezpif
+
+# ─────────────────────────── Roles ───────────────────────────
+# Каждый инструмент принадлежит одной роли. Generic-инструменты доступны всем
+# агентам; остальные — только соответствующему агенту.
+ROLES: dict[str, set[str]] = {
+    "generic": {
+        "current_datetime", "moex_resolve", "moex_search", "moex_quote", "moex_bond",
+    },
+    "market": {
+        "moex_candles", "moex_full_history", "moex_history", "moex_aggregates",
+        "moex_company_info", "moex_company_info_by_id", "moex_ir_calendar",
+        "moex_market_capitalization", "moex_correlations", "moex_splits",
+        "moex_turnovers", "moex_sitenews", "moex_indicative_rates",
+        "moex_search_endpoints", "moex_query",
+        "smartlab_dividends", "smartlab_dividend_history",
+        "price_volatility", "liquidity_assessment",
+    },
+    "bond": {
+        "moex_emitent_bonds", "moex_bond_coupons",
+        "moex_bond_market_aggregates", "moex_zcyc_history",
+        "bond_report", "bond_accrued_interest", "bond_synthetic_yield",
+        "raexpert_rating", "raexpert_emitent_ratings",
+        "zpif_payments", "zpif_funds_list",
+    },
+    "macro": {
+        "cbr_key_rate", "cbr_ruonia", "cbr_ruonia_index", "cbr_ibor",
+        "cbr_currency", "cbr_metals", "cbr_reserves", "cbr_inflation",
+        "rate_expectations", "curve_yield",
+    },
+    "portfolio": {
+        "portfolio_snapshot", "portfolio_rate_whatif",
+        "portfolio_income_calendar", "portfolio_movers",
+    },
+    "derivatives": {
+        "moex_futures_list", "moex_futures_open_interest",
+        "moex_futures_series", "moex_futures_promo", "moex_futures_basis",
+        "moex_options_assets", "moex_options_board",
+        "moex_option_quote", "moex_option_orderbook", "moex_option_history",
+    },
+}
+
+# Обратный индекс: tool_name → role
+_TOOL_ROLE: dict[str, str] = {}
+for _role, _names in ROLES.items():
+    for _name in _names:
+        _TOOL_ROLE[_name] = _role
+
+# Registered tool functions for role-based server creation
+_ROLE_FN: dict[str, list[Callable]] = {role: [] for role in ROLES}
+
+
+def _assign_tool_roles(mcp_instance: FastMCP) -> None:
+    """Tag every registered tool with role metadata based on ROLES."""
+    for tool in mcp_instance._tool_manager._tools.values():
+        role = _TOOL_ROLE.get(tool.name, "generic")
+        if tool.meta is None:
+            tool.meta = {}
+        tool.meta["role"] = role
+
+
+def _create_role_server(role: str, source: FastMCP) -> FastMCP:
+    """Create a FastMCP instance containing only tools for *role*.
+
+    Generic tools are included in every role server.
+    """
+    role_mcp = FastMCP(
+        name=f"ru-finance-{role}",
+        icons=_load_icons(),
+        host=source.settings.host,
+        port=source.settings.port,
+        streamable_http_path="/mcp",
+        stateless_http=source.settings.stateless_http,
+        event_store=InMemoryEventStore(),
+        retry_interval=5,
+        transport_security=source.settings.transport_security,
+        warn_on_duplicate_tools=False,
+    )
+    allowed = ROLES.get(role, set()) | ROLES["generic"]
+    for tool in source._tool_manager._tools.values():
+        if tool.name in allowed:
+            role_mcp._tool_manager._tools[tool.name] = tool
+    return role_mcp
 
 
 class InMemoryEventStore(EventStore):
@@ -1136,4 +1221,72 @@ def ref_moex_sec_types() -> dict:
 
 
 if __name__ == "__main__":
-    mcp.run(transport=os.environ.get("MCP_TRANSPORT", "stdio"))
+    transport = os.environ.get("MCP_TRANSPORT", "stdio")
+    if transport == "streamable-http":
+        import contextlib
+        from collections.abc import AsyncIterator
+
+        import uvicorn
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from starlette.applications import Starlette
+        from starlette.routing import Mount
+
+        _assign_tool_roles(mcp)
+
+        # ── Build session managers ──
+        _all_mgr = StreamableHTTPSessionManager(
+            app=mcp._mcp_server,
+            event_store=mcp._event_store,
+            retry_interval=5,
+            stateless=mcp.settings.stateless_http,
+            security_settings=mcp.settings.transport_security,
+        )
+
+        _role_mgrs: dict[str, tuple[FastMCP, StreamableHTTPSessionManager]] = {}
+        for _role in ROLES:
+            _rmcp = _create_role_server(_role, mcp)
+            _role_mgrs[_role] = (_rmcp, StreamableHTTPSessionManager(
+                app=_rmcp._mcp_server,
+                event_store=_rmcp._event_store,
+                retry_interval=5,
+                stateless=_rmcp.settings.stateless_http,
+                security_settings=_rmcp.settings.transport_security,
+            ))
+
+        # ASGI handlers (invoke after session_manager.run() has been entered)
+        async def _all_asgi(scope, receive, send):
+            await _all_mgr.handle_request(scope, receive, send)
+
+        _role_asgi: dict[str, object] = {}
+        for _role, (_rmcp, _mgr) in _role_mgrs.items():
+            # Closure to capture _mgr
+            def _make_handler(m):
+                async def _handler(scope, receive, send):
+                    await m.handle_request(scope, receive, send)
+                return _handler
+            _role_asgi[_role] = _make_handler(_mgr)
+
+        @contextlib.asynccontextmanager
+        async def _lifespan(app) -> AsyncIterator[None]:
+            async with contextlib.AsyncExitStack() as stack:
+                await stack.enter_async_context(_all_mgr.run())
+                for _, (_, mgr) in _role_mgrs.items():
+                    await stack.enter_async_context(mgr.run())
+                yield
+
+        routes: list[Mount] = [
+            Mount(f"/{role}", app=handler)
+            for role, handler in _role_asgi.items()
+        ]
+        routes.append(Mount("/", app=_all_asgi))
+
+        app = Starlette(lifespan=_lifespan, routes=routes)
+
+        uvicorn.run(
+            app,
+            host=mcp.settings.host,
+            port=mcp.settings.port,
+            log_level=mcp.settings.log_level.lower(),
+        )
+    else:
+        mcp.run(transport=transport)
