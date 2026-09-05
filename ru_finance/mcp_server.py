@@ -908,5 +908,145 @@ def portfolio_movers(assets: str) -> dict:
     return portfolio.movers(assets)
 
 
+# ─────────────────────────── Resources (reference data) ───────────────────────────
+@mcp.resource(
+    "ref://raexpert-ratings",
+    name="raexpert_rating_scale",
+    description="Full credit rating scale of Expert RA (Эксперт РА): 20 grades from ruAAA (best) to ruD (default). "
+                "Investment grade: ruBBB− and above. Speculative: ruBB+ and below. "
+                "Use in raexpert_emitent_ratings rating_min parameter.",
+    mime_type="application/json",
+)
+def ref_raexpert_ratings() -> dict:
+    return {
+        "agency": "Эксперт РА",
+        "scale": [
+            {"rating": k, "order": v}
+            for k, v in sorted(raexpert._RATING_ORDER.items(), key=lambda x: -x[1])
+        ],
+        "investment_grade_threshold": "ruBBB-",
+        "special": ["отозван (revoked)", "SB (standard bonds)"],
+    }
+
+
+@mcp.resource(
+    "ref://moex-sectors",
+    name="moex_sectors",
+    description="10 MOEX industry sectors for bond issuer filtering (sector parameter in "
+                "raexpert_emitent_ratings). Examples: Финансовый, Нефтегазовый, Металлургия и добыча.",
+    mime_type="application/json",
+)
+def ref_moex_sectors() -> dict:
+    return {
+        "sectors": raexpert.SECTORS,
+        "count": len(raexpert.SECTORS),
+    }
+
+
+@mcp.resource(
+    "ref://moex-sector-tickers",
+    name="moex_sector_tickers",
+    description="MOEX sector index composition: sector name → list of ticker symbols. "
+                "~100 issuers, updated ~2 times per year on index rebalancing.",
+    mime_type="application/json",
+)
+def ref_moex_sector_tickers() -> dict:
+    return {
+        "sectors": raexpert._MOEX_SECTOR_TICKERS,
+        "total_tickers": len(raexpert._MOEX_TICKER_TO_SECTOR),
+    }
+
+
+@mcp.resource(
+    "ref://raexpert-categories",
+    name="raexpert_categories",
+    description="10 Expert RA rating categories: slug (used in raexpert.ru URLs) → Russian name. "
+                "Examples: bankcredit_all → Кредитные организации, credits_all → Нефинансовые компании.",
+    mime_type="application/json",
+)
+def ref_raexpert_categories() -> dict:
+    return raexpert._CATEGORIES
+
+
+@mcp.resource(
+    "ref://futures-underlying-assets",
+    name="futures_underlying_assets",
+    description="36 FORTS futures underlying asset codes. FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN. "
+                "Indices: RTS, MREI, MXI, RVI, IMOEX. Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI. "
+                "Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC. "
+                "Use in moex_futures_list, moex_futures_basis, moex_futures_open_interest.",
+    mime_type="application/json",
+)
+def ref_futures_underlying_assets() -> dict:
+    return {
+        asset: {k: v for k, v in spec.items()}
+        for asset, spec in moex._UNDERLYING_MAP.items()
+    }
+
+
+@mcp.resource(
+    "ref://cbr-currencies",
+    name="cbr_currencies",
+    description="10 CBR FX rate codes available in cbr_currency (ISO 4217 → pair vs RUB). "
+                "USD, EUR, CNY, GBP, CHF, JPY(×100), HKD, TRY, KZT, BYN.",
+    mime_type="application/json",
+)
+def ref_cbr_currencies() -> dict:
+    return {
+        "currencies": [
+            {"code": "USD", "pair": "USD/RUB"},
+            {"code": "EUR", "pair": "EUR/RUB"},
+            {"code": "CNY", "pair": "CNY/RUB"},
+            {"code": "GBP", "pair": "GBP/RUB"},
+            {"code": "CHF", "pair": "CHF/RUB"},
+            {"code": "JPY", "pair": "JPY(100)/RUB", "note": "per 100 JPY"},
+            {"code": "HKD", "pair": "HKD/RUB"},
+            {"code": "TRY", "pair": "TRY/RUB"},
+            {"code": "KZT", "pair": "KZT/RUB"},
+            {"code": "BYN", "pair": "BYN/RUB"},
+        ],
+    }
+
+
+@mcp.resource(
+    "ref://candle-intervals",
+    name="candle_intervals",
+    description="All valid interval codes for moex_candles: "
+                "1 (min), 10, 60 (hour), 24 (day, default), 7 (week), 31 (month).",
+    mime_type="application/json",
+)
+def ref_candle_intervals() -> dict:
+    return {
+        "intervals": [
+            {"code": "1",  "label": "1 minute",  "minutes": 1},
+            {"code": "10", "label": "10 minutes", "minutes": 10},
+            {"code": "60", "label": "1 hour",     "minutes": 60},
+            {"code": "24", "label": "1 day",      "minutes": 1440, "default": True},
+            {"code": "7",  "label": "1 week",     "minutes": 10080},
+            {"code": "31", "label": "1 month",    "minutes": 44640},
+        ],
+    }
+
+
+@mcp.resource(
+    "ref://moex-sec-types",
+    name="moex_sec_types",
+    description="Valid sec_type filter values for moex_search: "
+                "bond, share, stock, fund, etf, index.",
+    mime_type="application/json",
+)
+def ref_moex_sec_types() -> dict:
+    return {
+        "sec_types": [
+            {"code": "bond",   "description": "Bonds (OFZ, corporate, municipal)",   "group": "stock_bonds"},
+            {"code": "share",  "description": "Equities (incl. depositary receipts)", "group": "stock_shares"},
+            {"code": "stock",  "description": "Synonym for share",                    "group": "stock_shares"},
+            {"code": "fund",   "description": "Mutual funds / PIFs (ПИФы)",           "group": "stock_ppif"},
+            {"code": "etf",    "description": "ETF / БПИФ",                           "group": "stock_etf"},
+            {"code": "index",  "description": "MOEX indices",                         "group": "stock_index"},
+        ],
+    }
+
+
 if __name__ == "__main__":
     mcp.run(transport=os.environ.get("MCP_TRANSPORT", "stdio"))
