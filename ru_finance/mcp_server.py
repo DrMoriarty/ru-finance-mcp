@@ -392,7 +392,13 @@ def moex_indicative_rates(frm: str | None = None,
 def moex_futures_list(asset_code: str) -> list[dict]:
     """FORTS futures contracts catalog with market data and spec.
 
-    Args: asset_code — underlying (e.g. 'Si', 'RTS', 'BR', 'GAZR'). Case-insensitive.
+    Valid asset_code values (see ref://futures-underlying-assets):
+      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
+      Indices: RTS, MREI, MXI, RVI, IMOEX.
+      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
+      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
+
+    Args: asset_code — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'GAZR').
     Returns [{secid, name, asset_code, expiry_date, lot_volume, min_step,
     step_price, initial_margin, last_settle_price, open_interest, oichange,
     bid, offer, last, high, low, volume_today, value_today, ...}].
@@ -404,7 +410,13 @@ def moex_futures_list(asset_code: str) -> list[dict]:
 def moex_futures_open_interest(asset: str) -> dict:
     """Open interest breakdown by legal/physical persons.
 
-    Args: asset — underlying code ('Si', 'RTS', 'BR', 'SBRF', ...).
+    Valid asset_code values (see ref://futures-underlying-assets):
+      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
+      Indices: RTS, MREI, MXI, RVI, IMOEX.
+      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
+      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
+
+    Args: asset — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'SBRF').
     Returns: {asset, tradedate, juridical: {oi_long, oi_short, oi_change_...},
     physical: {...}, total_oi_long, total_oi_short}.
     Shows who (retail vs professional) is building/reducing positions.
@@ -441,7 +453,13 @@ async def moex_futures_basis(asset_code: str, ctx: Context) -> dict:
     stock/index/commodity from MOEX) and annualises the spread to expiry.
     Positive → contango (sell futures + buy spot); negative → backwardation.
 
-    Args: asset_code — underlying code ('Si', 'RTS', 'BR', 'SBRF', ...).
+    Valid asset_code values (see ref://futures-underlying-assets):
+      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
+      Indices: RTS, MREI, MXI, RVI, IMOEX.
+      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
+      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
+
+    Args: asset_code — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'SBRF').
     Returns: {asset_code, underlying: {price, source}, regime,
     contracts: [{secid, name, expiry_date, days_to_expiry, futures_price,
     spot_price, basis_pct, annualized_return_pct, open_interest}]}.
