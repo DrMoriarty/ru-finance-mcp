@@ -41,7 +41,6 @@ ROLES: dict[str, set[str]] = {
         "smartlab_stock_screener", "smartlab_company_financials",
         "smartlab_company_financials_multi",
         "price_volatility", "liquidity_assessment",
-        "etf_screener",
     },
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
@@ -50,6 +49,7 @@ ROLES: dict[str, set[str]] = {
         "raexpert_rating", "raexpert_emitent_ratings",
         "zpif_payments", "zpif_funds_list",
         "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
+        "etf_screener",
     },
     "macro": {
         "cbr_key_rate", "cbr_ruonia", "cbr_ruonia_index", "cbr_ibor",
