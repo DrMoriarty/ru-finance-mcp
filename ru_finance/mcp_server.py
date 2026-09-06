@@ -38,8 +38,9 @@ ROLES: dict[str, set[str]] = {
         "moex_turnovers", "moex_sitenews", "moex_indicative_rates",
         "moex_search_endpoints", "moex_query",
         "smartlab_dividends", "smartlab_dividend_history",
+        "smartlab_stock_screener", "smartlab_company_financials",
+        "smartlab_company_financials_multi",
         "price_volatility", "liquidity_assessment",
-        "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
     },
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
@@ -47,6 +48,7 @@ ROLES: dict[str, set[str]] = {
         "bond_report", "bond_accrued_interest", "bond_synthetic_yield",
         "raexpert_rating", "raexpert_emitent_ratings",
         "zpif_payments", "zpif_funds_list",
+        "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
     },
     "macro": {
         "cbr_key_rate", "cbr_ruonia", "cbr_ruonia_index", "cbr_ibor",
@@ -639,6 +641,147 @@ async def smartlab_dividend_history(ticker: str, ctx: Context) -> list[dict]:
     """
     await ctx.report_progress(0, 2, "Fetching dividend history")
     return smartlab.get_dividend_history(ticker)
+
+
+# ─────────────────── Fundamental screener (smart-lab.ru) ───────────────────
+@mcp.tool()
+async def smartlab_stock_screener(
+    ctx: Context,
+    period: str = "LTM",
+    report_type: str = "-1",
+    sector_id: int | None = None,
+    capitalization_min: int | None = None,
+    capitalization_max: int | None = None,
+    volume_min: int | None = None,
+    volume_max: int | None = None,
+    company_type: str = "",
+    is_state_owned: int = -1,
+    is_exporter: int = -1,
+    is_raw_stuff: int = -1,
+    order_by: str = "market_cap",
+    order_dir: str = "desc",
+    limit: int = 100,
+) -> list[dict]:
+    """Fast fundamental stock screener for MOEX (all stocks in one request).
+
+    Source: smart-lab.ru/q/shares_fundamental2/ (LTM data, 4h cache).
+    Returns one HTTP request with all stocks and key multiples:
+    [{ticker, name, market_cap, ev, revenue, net_income, div_yield,
+      div_yield_priv, div_payout_ratio, p_e, p_s, p_b, ev_ebitda,
+      ebitda_margin, debt_ebitda, report_type}].
+
+    Args:
+        period: reporting period ('LTM', '2025', '2024', ...)
+        report_type: accounting standard ('-1'=any, 'MSFO', 'RSBU')
+        sector_id: sector filter (1=NEFTEGAZ, 2=BANKI, 3=METALL, 4=ELEKTRO,
+            5=RITEYL, 6=TELECOM, 7=TRANSPORT, 8=BUILDERS, 9=MACHINE,
+            13=CONSUMER, 14=FINANCE, 15=HIGH TECH, 21=METALL colour,
+            25=INTERNET, 26=AGRO, 29=PHARMA, ...)
+        capitalization_min: min market cap in RUB (e.g. 10_000_000_000)
+        capitalization_max: max market cap in RUB
+        volume_min: min avg daily volume in RUB
+        volume_max: max avg daily volume in RUB
+        company_type: ''=all, 'growth', 'value'
+        is_state_owned: -1=all, 1=state, 0=private
+        is_exporter: -1=all, 1=export, 0=domestic
+        is_raw_stuff: -1=all, 1=commodity, 0=non-commodity
+        order_by: sort field (market_cap, ev, revenue, p_e, p_s, p_b,
+            ev_ebitda, ebitda_margin, debt_ebitda, div_yield, net_income)
+        order_dir: 'asc' or 'desc'
+        limit: max results to return
+    """
+    await ctx.report_progress(0, 2, "Fetching stock screener from smart-lab.ru")
+    return smartlab.get_stock_screener(
+        period=period,
+        report_type=report_type,
+        sector_id=sector_id,
+        capitalization_min=capitalization_min,
+        capitalization_max=capitalization_max,
+        volume_min=volume_min,
+        volume_max=volume_max,
+        company_type=company_type,
+        is_state_owned=is_state_owned,
+        is_exporter=is_exporter,
+        is_raw_stuff=is_raw_stuff,
+        order_by=order_by,
+        order_dir=order_dir,
+        limit=limit,
+    )
+
+
+@mcp.tool()
+async def smartlab_company_financials(
+    ticker: str,
+    ctx: Context,
+    period: str = "y",
+    standard: str = "MSFO",
+    fields: list[str] | None = None,
+) -> dict:
+    """Detailed financial profile of a single company from smart-lab.ru.
+
+    Source: smart-lab.ru/q/{ticker}/f/{period}/{standard}/ (4h cache).
+    Returns multi-year financial statements with LTM:
+    {ticker, name, years, data: {field: {label, values: {year: val, "LTM": val}}}}.
+
+    Available fields (grouped):
+    Valuation: p_e, p_s, p_b, p_bv, p_fcf, ev_ebitda, ev, market_cap,
+        eps, bv_share, fcf_share, free_float, fcf_yield
+    Income: revenue, ebitda, operating_income, net_income, net_income_ns,
+        cost_of_production, opex, amortization, employment_expenses,
+        interest_expenses
+    Cash flow: ocf, fcf, capex, capex_revenue
+    Balance: assets, net_assets, book_value, debt, net_debt, cash,
+        goodwill, intangible_assets, investment_portfolio
+    Profitability: roe, roa, ebitda_margin, net_margin
+    Leverage: debt_ebitda
+    Dividends: dividend, dividend_pr, div_yield, div_yield_priv,
+        dividend_payout, div_payout_ratio
+    Share info: common_share, priv_share, number_of_shares,
+        number_of_priv_shares
+    Banking: net_operating_income, net_interest_income, commission_income,
+        bank_assets, capital, loan_portfolio, deposits,
+        core_capital_adequacy_ratio, total_capital_adequacy_ratio,
+        cost_of_risk_ratio, cost_to_income, loan_to_deposit_ratio,
+        share_of_non_performing_loans
+
+    Args:
+        ticker: stock ticker (e.g. 'SBER', 'LKOH', 'GAZP')
+        period: 'y'=annual, 'q'=quarterly
+        standard: 'MSFO'=IFRS, 'RSBU'=RAS
+        fields: list of field names to extract. None or ['*'] = all available.
+    """
+    await ctx.report_progress(0, 2, f"Fetching financials for {ticker}")
+    return smartlab.get_company_financials(
+        ticker, period=period, standard=standard, fields=fields,
+    )
+
+
+@mcp.tool()
+async def smartlab_company_financials_multi(
+    tickers: list[str],
+    ctx: Context,
+    period: str = "y",
+    standard: str = "MSFO",
+    fields: list[str] | None = None,
+) -> list[dict]:
+    """Detailed financial profiles for multiple companies (one request per ticker).
+
+    Same as smartlab_company_financials but for a batch of tickers.
+    Each ticker is fetched independently with caching; errors on individual
+    tickers don't stop processing of the rest.
+
+    Args:
+        tickers: list of tickers, e.g. ['SBER', 'LKOH', 'GAZP']
+        period: 'y'=annual, 'q'=quarterly
+        standard: 'MSFO'=IFRS, 'RSBU'=RAS
+        fields: list of field names, None or ['*'] = all.
+    """
+    n = len(tickers)
+    await ctx.report_progress(0, n, f"Fetching financials for {n} companies")
+    return smartlab.get_company_financials_multi(
+        tickers, period=period, standard=standard, fields=fields,
+    )
+
 
 # ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
 @mcp.tool()
