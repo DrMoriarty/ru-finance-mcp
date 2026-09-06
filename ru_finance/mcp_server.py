@@ -659,6 +659,7 @@ async def smartlab_stock_screener(
     is_state_owned: int = -1,
     is_exporter: int = -1,
     is_raw_stuff: int = -1,
+    emitent: str | None = None,
     order_by: str = "market_cap",
     order_dir: str = "desc",
     limit: int = 15,
@@ -686,6 +687,7 @@ async def smartlab_stock_screener(
         is_state_owned: -1=all, 1=state, 0=private
         is_exporter: -1=all, 1=export, 0=domestic
         is_raw_stuff: -1=all, 1=commodity, 0=non-commodity
+        emitent: company name substring (case-insensitive), e.g. 'Сбер', 'Лукойл'
         order_by: sort field (market_cap, ev, revenue, p_e, p_s, p_b,
             ev_ebitda, ebitda_margin, debt_ebitda, div_yield, net_income)
         order_dir: 'asc' or 'desc'
@@ -704,6 +706,7 @@ async def smartlab_stock_screener(
         is_state_owned=is_state_owned,
         is_exporter=is_exporter,
         is_raw_stuff=is_raw_stuff,
+        emitent=emitent,
         order_by=order_by,
         order_dir=order_dir,
         limit=limit,
@@ -1140,6 +1143,7 @@ async def bond_screener(
     accrued_int_max: float | None = None,
     rating_min: str | None = None,
     sector: str | None = None,
+    emitent: str | None = None,
     include_qualified: bool = False,
     qualified_only: bool | None = None,
     sort_by: str = "ytm",
@@ -1169,6 +1173,7 @@ async def bond_screener(
             Ratings from raexpert.ru, 4h cache. Does not cover all issuers.
         sector — MOEX sector of the issuer (e.g. 'Финансовый', 'Нефтегазовый').
             Covers ~100 largest issuers via MOEX sector indices.
+        emitent — issuer name substring (case-insensitive), e.g. 'Сбер', 'Газпром'.
         include_qualified — add is_qualified field (ISQUALIFIEDINVESTORS).
             Adds a per-bond ISS request (parallel, max 200).
         qualified_only — True: only qualified-investor bonds; False: only
@@ -1200,7 +1205,7 @@ async def bond_screener(
         currency=currency,
         issue_volume_min=issue_volume_min, issue_volume_max=issue_volume_max,
         accrued_int_min=accrued_int_min, accrued_int_max=accrued_int_max,
-        rating_min=rating_min, sector=sector,
+        rating_min=rating_min, sector=sector, emitent=emitent,
         include_qualified=include_qualified, qualified_only=qualified_only,
         sort_by=sort_by, sort_desc=sort_desc, limit=limit,
     )

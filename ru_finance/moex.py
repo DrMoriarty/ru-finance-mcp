@@ -879,6 +879,7 @@ def bond_screener(
     accrued_int_max: float | None = None,
     rating_min: str | None = None,
     sector: str | None = None,
+    emitent: str | None = None,
     include_qualified: bool = False,
     qualified_only: bool | None = None,
     sort_by: str = "ytm",
@@ -908,6 +909,7 @@ def bond_screener(
         rating_min — минимальный рейтинг Эксперт РА ('ruBBB-' = investment grade)
         sector — MOEX-сектор эмитента (напр. 'Финансовый', 'Нефтегазовый').
                  Ограничение: карты секторов покрывает ~100 крупнейших эмитентов.
+        emitent — подстрока названия эмитента (регистронезависимо), напр. 'Сбер', 'Газпром'.
         include_qualified — добавить поле is_qualified (ISQUALIFIEDINVESTORS).
                             Дополнительный запрос на каждую бумагу (параллельно).
         qualified_only — True: только для квалифицированных;
@@ -1048,6 +1050,10 @@ def bond_screener(
     else:
         for b in filtered:
             b["sector"] = None
+
+    if emitent:
+        emit_lower = emitent.lower()
+        filtered = [b for b in filtered if emit_lower in (b.get("emitent") or "").lower()]
 
     # ── Шаг 5: ISQUALIFIEDINVESTORS (опционально, параллельно) ──
     if include_qualified:

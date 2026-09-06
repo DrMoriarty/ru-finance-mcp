@@ -316,6 +316,7 @@ def get_stock_screener(
     is_state_owned: int = -1,
     is_exporter: int = -1,
     is_raw_stuff: int = -1,
+    emitent: str | None = None,
     order_by: str = "market_cap",
     order_dir: str = "desc",
     limit: int = 15,
@@ -341,6 +342,7 @@ def get_stock_screener(
         is_state_owned: -1=все, 1=гос, 0=частные
         is_exporter: -1=все, 1=экспорт, 0=внутренний
         is_raw_stuff: -1=все, 1=сырьевые, 0=несырьевые
+        emitent: подстрока названия компании (регистронезависимо), напр. 'Сбер', 'Лукойл'
         order_by: поле сортировки (market_cap, ev, revenue, p_e, p_s, p_b,
             ev_ebitda, ebitda_margin, debt_ebitda, div_yield, net_income)
         order_dir: направление ('asc' или 'desc')
@@ -365,7 +367,11 @@ def get_stock_screener(
     query = "&".join(params)
     full_path = f"{path}?{query}" if query else path
     html = _fetch(full_path)
-    return parse_screener_table(html)[:limit]
+    results = parse_screener_table(html)
+    if emitent:
+        emit_lower = emitent.lower()
+        results = [r for r in results if emit_lower in (r.get("name") or "").lower()]
+    return results[:limit]
 
 
 # ─────────── Детальный финансовый профиль (/q/{ticker}/f/y/MSFO/) ───────────
