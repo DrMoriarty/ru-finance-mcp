@@ -688,6 +688,418 @@ def emitent_bonds(
     return matches
 
 
+# ─────────────────── Скринер облигаций (bond_screener) ───────────────────
+
+def _freq_from_period(period_days: int | None) -> int:
+    """Частота купонов в год (1, 2, 4, 6, 12) из периода в днях."""
+    if not period_days or period_days <= 0:
+        return 2
+    _CANONICAL = {365: 1, 182: 2, 183: 2, 91: 4, 92: 4, 61: 6, 30: 12, 31: 12}
+    if period_days in _CANONICAL:
+        return _CANONICAL[period_days]
+    freq = round(365 / period_days)
+    return max(1, min(freq, 12))
+
+
+# Типы купонов (BONDTYPE ISS)
+_FIXED_TYPES = {"Фикс с известным купоном", "Фикс с неизвестным купоном"}
+_FLOAT_TYPES = {"Флоатер"}
+_AMORT_TYPES = {"Амортизируемые облигации"}
+
+# Соответствие user-friendly названий и ISS BONDTYPE
+_COUPON_TYPE_MAP = {
+    "fixed": _FIXED_TYPES,
+    "float": _FLOAT_TYPES,
+    "amortization": _AMORT_TYPES,
+}
+
+
+def _match_rating(emitent_name: str, all_ratings: list) -> str | None:
+    """Найти рейтинг эмитента в кеше raexpert по имени (fuzzy)."""
+    if not emitent_name or not all_ratings:
+        return None
+    from .raexpert import _normalize_emitent_name
+    norm = _normalize_emitent_name(emitent_name).upper()
+    if not norm:
+        return None
+    for r in all_ratings:
+        if r.get("type") != "emitent":
+            continue
+        r_norm = _normalize_emitent_name(r["name"]).upper()
+        if not r_norm:
+            continue
+        if norm in r_norm or r_norm in norm:
+            return r.get("rating")
+    return None
+
+
+def _match_sector(emitent_name: str) -> str | None:
+    """Определить MOEX-сектор эмитента (по карте raexpert, ~100 эмитентов)."""
+    try:
+        from .raexpert import _sector_for_emitent
+        return _sector_for_emitent(emitent_name)
+    except Exception:
+        return None
+
+
+def _fetch_bond_spec_qualified(secid: str, retries: int = 2) -> bool | None:
+    """Получить ISQUALIFIEDINVESTORS для одной облигации через T_SPEC."""
+    try:
+        raw = exec_template(T_SPEC, {"security": secid}, retries=retries)
+        for block in ("description", "securities"):
+            rows = records(raw, block)
+            if rows:
+                for row in rows:
+                    if row.get("name") == "ISQUALIFIEDINVESTORS":
+                        return str(row.get("value", "0")) == "1"
+    except Exception:
+        pass
+    return None
+
+
+def _parse_board_bond(row: dict, board: str) -> dict | None:
+    """Нормализовать строку _fetch_board_bonds в словарь скринера."""
+    # Цена: приоритет LAST → WAPRICE → LCLOSEPRICE → MARKETPRICE
+    price = first(row.get("LAST"), row.get("WAPRICE"),
+                  row.get("LCLOSEPRICE"), row.get("MARKETPRICE"))
+    ytm = first(row.get("YIELD"), row.get("YIELDATWAPRICE"))
+    dur_days = row.get("DURATION")
+    dur_years = round(dur_days / 365, 2) if dur_days and dur_days > 0 else None
+    mod_dur = None
+    if dur_years and ytm:
+        mod_dur = round(dur_years / (1 + ytm / 100 / 2), 2)
+
+    coupon_period = row.get("COUPONPERIOD")
+    coupon_freq = _freq_from_period(coupon_period)
+
+    face_unit = row.get("FACEUNIT") or "SUR"
+
+    bond_type = row.get("BONDTYPE") or ""
+    bond_subtype = row.get("BONDSUBTYPE") or ""
+
+    maturity = row.get("MATDATE")
+    offer_date = row.get("OFFERDATE")
+    put_date = row.get("PUTOPTIONDATE")
+    call_date = row.get("CALLOPTIONDATE")
+    active_offer = offer_date if (offer_date and offer_date != "0000-00-00") else None
+    active_put = put_date if (put_date and put_date != "0000-00-00") else None
+    active_call = call_date if (call_date and call_date != "0000-00-00") else None
+    has_offer = bool(active_offer or active_put or active_call)
+    first_offer = None
+    for d in (active_offer, active_put, active_call):
+        if d and d != "0000-00-00":
+            if first_offer is None or d < first_offer:
+                first_offer = d
+
+    # Срок до погашения (years)
+    ytm_years = None
+    if maturity and maturity != "0000-00-00":
+        try:
+            ytm_years = _bonds.years_to_maturity(maturity)
+        except (ValueError, TypeError):
+            pass
+
+    accrued = row.get("ACCRUEDINT")
+
+    issue_size = row.get("ISSUESIZE")
+    issue_size_placed = row.get("ISSUESIZEPLACED")
+
+    # Ликвидность
+    val_today = row.get("VALTODAY")
+    vol_today = row.get("VOLTODAY")
+    num_trades = row.get("NUMTRADES")
+    bid = row.get("BID")
+    offer_px = row.get("OFFER")
+    spread = row.get("SPREAD")
+    bid_ask_spread_pct = None
+    if bid and offer_px and bid > 0 and offer_px > 0 and offer_px > bid:
+        avg_price = (bid + offer_px) / 2
+        if avg_price > 0:
+            bid_ask_spread_pct = round((offer_px - bid) / avg_price * 100, 4)
+
+    list_level = row.get("LISTLEVEL")
+
+    return {
+        "secid": row.get("SECID"),
+        "shortname": row.get("SHORTNAME"),
+        "isin": row.get("ISIN"),
+        "secname": row.get("SECNAME"),
+        "board": board,
+        "emitent": row.get("SECNAME") or row.get("SHORTNAME") or "",
+        "price_pct": price,
+        "ytm": ytm,
+        "coupon_pct": row.get("COUPONPERCENT"),
+        "coupon_value": row.get("COUPONVALUE"),
+        "coupon_freq": coupon_freq,
+        "coupon_period_days": coupon_period,
+        "maturity": maturity,
+        "years_to_maturity": ytm_years,
+        "offer_date": first_offer,
+        "has_offer": has_offer,
+        "duration_years": dur_years,
+        "mod_duration_years": mod_dur,
+        "bond_type": bond_type,
+        "bond_subtype": bond_subtype,
+        "is_amortization": bond_type in _AMORT_TYPES,
+        "face_unit": face_unit,
+        "face_value": row.get("FACEVALUE"),
+        "accrued_int": accrued,
+        "issue_size": issue_size,
+        "issue_size_placed": issue_size_placed,
+        "list_level": list_level,
+        # Ликвидность
+        "value_today": val_today,
+        "vol_today": vol_today,
+        "num_trades": num_trades,
+        "bid_ask_spread_pct": bid_ask_spread_pct,
+    }
+
+
+def bond_screener(
+    *,
+    ytm_min: float | None = None,
+    ytm_max: float | None = None,
+    coupon_min: float | None = None,
+    coupon_max: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    maturity_from: str | None = None,
+    maturity_to: str | None = None,
+    duration_min: float | None = None,
+    duration_max: float | None = None,
+    has_offer: bool | None = None,
+    has_amortization: bool | None = None,
+    coupon_type: str | None = None,
+    coupon_freq_min: int | None = None,
+    coupon_freq_max: int | None = None,
+    currency: str | None = None,
+    issue_volume_min: int | None = None,
+    issue_volume_max: int | None = None,
+    accrued_int_min: float | None = None,
+    accrued_int_max: float | None = None,
+    rating_min: str | None = None,
+    sector: str | None = None,
+    include_qualified: bool = False,
+    qualified_only: bool | None = None,
+    sort_by: str = "ytm",
+    sort_desc: bool = True,
+    limit: int = 50,
+) -> dict:
+    """Скринер облигаций MOEX с фильтрацией по набору параметров.
+
+    Загружает все облигации с бордов TQCB (корпоративные) и TQOB (ОФЗ),
+    применяет фильтры, опционально обогащает кредитным рейтингом и статусом
+    квалифицированного инвестора.
+
+    Args:
+        ytm_min/ytm_max — доходность к погашению (%), границы включительно
+        coupon_min/coupon_max — купонная ставка (%)
+        price_min/price_max — цена чистая (% от номинала)
+        maturity_from/maturity_to — дата погашения ('YYYY-MM-DD')
+        duration_min/duration_max — дюрация Macaulay (годы)
+        has_offer — True: только с офертой; False: только без
+        has_amortization — True: только амортизируемые; False: только без
+        coupon_type — 'fixed' (фиксированный), 'float' (плавающий),
+                      'amortization' (амортизируемые). None = любой
+        coupon_freq_min/coupon_freq_max — купонов в год (1,2,4,6,12)
+        currency — код валюты ('SUR', 'USD', 'EUR', 'CNY')
+        issue_volume_min/issue_volume_max — объём выпуска (штук бумаг)
+        accrued_int_min/accrued_int_max — НКД (RUB)
+        rating_min — минимальный рейтинг Эксперт РА ('ruBBB-' = investment grade)
+        sector — MOEX-сектор эмитента (напр. 'Финансовый', 'Нефтегазовый').
+                 Ограничение: карты секторов покрывает ~100 крупнейших эмитентов.
+        include_qualified — добавить поле is_qualified (ISQUALIFIEDINVESTORS).
+                            Дополнительный запрос на каждую бумагу (параллельно).
+        qualified_only — True: только для квалифицированных;
+                         False: только для неквалифицированных; None — без фильтра.
+                         Требует include_qualified=True.
+        sort_by — поле сортировки: 'ytm', 'duration', 'maturity', 'price',
+                  'coupon', 'issue_volume'
+        sort_desc — True = по убыванию
+        limit — максимум результатов (1..500)
+
+    Returns:
+        {count, bonds: [{secid, shortname, isin, board, emitent,
+          price_pct, ytm, coupon_pct, coupon_freq, duration_years, mod_duration_years,
+          maturity, years_to_maturity, offer_date, has_offer,
+          bond_type, is_amortization, face_unit, face_value, accrued_int,
+          issue_size, issue_size_placed, list_level,
+          value_today, vol_today, num_trades, bid_ask_spread_pct,
+          rating?, sector?, is_qualified?}]}
+    """
+    limit = max(1, min(limit, 500))
+
+    # ── Шаг 1: загрузить все облигации с бордов (параллельно) ──
+    boards_to_fetch = ["TQCB", "TQOB"]
+    board_data: list[tuple[str, dict]] = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(_fetch_board_bonds, b): b for b in boards_to_fetch}
+        for f in as_completed(futs):
+            board = futs[f]
+            try:
+                for row in f.result():
+                    board_data.append((board, row))
+            except Exception:
+                continue
+
+    # ── Шаг 2: нормализация ──
+    all_bonds: list[dict] = []
+    for board, row in board_data:
+        parsed = _parse_board_bond(row, board)
+        if parsed:
+            all_bonds.append(parsed)
+
+    # ── Шаг 3: фильтрация ──
+    filtered = all_bonds
+
+    if ytm_min is not None:
+        filtered = [b for b in filtered if b.get("ytm") is not None and b["ytm"] >= ytm_min]
+    if ytm_max is not None:
+        filtered = [b for b in filtered if b.get("ytm") is not None and b["ytm"] <= ytm_max]
+
+    if coupon_min is not None:
+        filtered = [b for b in filtered if b.get("coupon_pct") is not None and b["coupon_pct"] >= coupon_min]
+    if coupon_max is not None:
+        filtered = [b for b in filtered if b.get("coupon_pct") is not None and b["coupon_pct"] <= coupon_max]
+
+    if price_min is not None:
+        filtered = [b for b in filtered if b.get("price_pct") is not None and b["price_pct"] >= price_min]
+    if price_max is not None:
+        filtered = [b for b in filtered if b.get("price_pct") is not None and b["price_pct"] <= price_max]
+
+    if maturity_from:
+        filtered = [b for b in filtered if b.get("maturity") and b["maturity"] >= maturity_from]
+    if maturity_to:
+        filtered = [b for b in filtered if b.get("maturity") and b["maturity"] <= maturity_to]
+
+    if duration_min is not None:
+        filtered = [b for b in filtered
+                    if (b.get("duration_years") or b.get("years_to_maturity")) is not None
+                    and (b.get("duration_years") or b.get("years_to_maturity")) >= duration_min]
+    if duration_max is not None:
+        filtered = [b for b in filtered
+                    if (b.get("duration_years") or b.get("years_to_maturity")) is not None
+                    and (b.get("duration_years") or b.get("years_to_maturity")) <= duration_max]
+
+    if has_offer is not None:
+        filtered = [b for b in filtered if b["has_offer"] == has_offer]
+
+    if has_amortization is not None:
+        filtered = [b for b in filtered if b["is_amortization"] == has_amortization]
+
+    if coupon_type:
+        target_types = _COUPON_TYPE_MAP.get(coupon_type.lower())
+        if target_types:
+            filtered = [b for b in filtered if b.get("bond_type") in target_types]
+
+    if coupon_freq_min is not None:
+        filtered = [b for b in filtered if b["coupon_freq"] >= coupon_freq_min]
+    if coupon_freq_max is not None:
+        filtered = [b for b in filtered if b["coupon_freq"] <= coupon_freq_max]
+
+    if currency:
+        filtered = [b for b in filtered if b.get("face_unit") == currency.upper()]
+
+    if issue_volume_min is not None:
+        filtered = [b for b in filtered if b.get("issue_size") and b["issue_size"] >= issue_volume_min]
+    if issue_volume_max is not None:
+        filtered = [b for b in filtered if b.get("issue_size") and b["issue_size"] <= issue_volume_max]
+
+    if accrued_int_min is not None:
+        filtered = [b for b in filtered
+                    if b.get("accrued_int") is not None and b["accrued_int"] >= accrued_int_min]
+    if accrued_int_max is not None:
+        filtered = [b for b in filtered
+                    if b.get("accrued_int") is not None and b["accrued_int"] <= accrued_int_max]
+
+    # ── Шаг 4: кредитный рейтинг + сектор (опционально) ──
+    all_ratings_cache: list | None = None
+
+    if rating_min is not None:
+        # Рейтинги загружаются только при запросе фильтра
+        try:
+            from .raexpert import _fetch_all_ratings, _RATING_ORDER as ro
+            all_ratings_cache = _fetch_all_ratings()
+            min_score = ro.get(rating_min.strip())
+            if min_score is not None:
+                rated_filtered = []
+                for b in filtered:
+                    rating = _match_rating(b.get("emitent", ""), all_ratings_cache)
+                    b["rating"] = rating
+                    if rating and rating != "отозван" and ro.get(rating, -1) >= min_score:
+                        rated_filtered.append(b)
+                filtered = rated_filtered
+        except Exception:
+            for b in filtered:
+                b["rating"] = None
+    else:
+        for b in filtered:
+            b["rating"] = None
+
+    # Сектор — только если фильтр задан
+    if sector:
+        sector_filtered = []
+        for b in filtered:
+            s = _match_sector(b.get("emitent", ""))
+            b["sector"] = s
+            if s == sector:
+                sector_filtered.append(b)
+        filtered = sector_filtered
+    else:
+        for b in filtered:
+            b["sector"] = None
+
+    # ── Шаг 5: ISQUALIFIEDINVESTORS (опционально, параллельно) ──
+    if include_qualified:
+        secids = [b["secid"] for b in filtered[:200]]  # ограничим 200 запросами
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futs = {ex.submit(_fetch_bond_spec_qualified, sid): sid for sid in secids}
+            results: dict[str, bool | None] = {}
+            for f in as_completed(futs):
+                sid = futs[f]
+                try:
+                    results[sid] = f.result()
+                except Exception:
+                    results[sid] = None
+        for b in filtered:
+            b["is_qualified"] = results.get(b["secid"])
+
+        # Фильтр только для квалифицированных / неквалифицированных
+        if qualified_only is True:
+            filtered = [b for b in filtered if b.get("is_qualified") is True]
+        elif qualified_only is False:
+            filtered = [b for b in filtered if b.get("is_qualified") is False]
+
+    # ── Шаг 6: сортировка ──
+    _SORT_KEYS = {
+        "ytm": "ytm",
+        "duration": "duration_years",
+        "maturity": "years_to_maturity",
+        "price": "price_pct",
+        "coupon": "coupon_pct",
+        "issue_volume": "issue_size",
+    }
+    sort_field = _SORT_KEYS.get(sort_by, "ytm")
+
+    def _sort_key(b: dict) -> float:
+        v = b.get(sort_field)
+        if v is None:
+            return float("-inf") if sort_desc else float("inf")
+        return float(v)
+
+    filtered.sort(key=_sort_key, reverse=sort_desc)
+
+    # ── Шаг 7: лимит ──
+    result = filtered[:limit]
+
+    return {
+        "count_shown": len(result),
+        "count_total_matching": len(filtered),
+        "count_all_bonds": len(all_bonds),
+        "bonds": result,
+    }
+
+
 # ─────────────────── CCI (корпоративная информация НРД) ───────────────────
 
 def company_info(query: str) -> dict:

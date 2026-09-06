@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-62 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+66 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -356,6 +356,49 @@ MIACR — фактические средневзвешенные ставки �
 НКД облигации (накопленный купонный доход) — расчёт из календаря купонных дат.
 - **Принимает:** `query` — номер ОФЗ/ISIN.
 - **Возвращает:** `{accrued_rub, accrued_pct, days_accrued, coupon_period_days, last_coupon, next_coupon}`.
+
+### 🧮 `bond_screener(...)`
+Скринер облигаций: фильтрация по множеству параметров одновременно.
+Загружает все облигации с бордов TQCB (корпоративные) и TQOB (ОФЗ, валютные),
+применяет фильтры, опционально обогащает кредитным рейтингом (Эксперт РА) и
+статусом квалифицированного инвестора.
+- **Принимает (все опционально):**
+  - `ytm_min`, `ytm_max` — доходность к погашению (%).
+  - `coupon_min`, `coupon_max` — купонная ставка (%).
+  - `price_min`, `price_max` — чистая цена (% от номинала).
+  - `maturity_from`, `maturity_to` — дата погашения (`YYYY-MM-DD`).
+  - `duration_min`, `duration_max` — дюрация Маколея (годы).
+  - `has_offer` — `True`: только с офертой; `False`: только без.
+  - `has_amortization` — `True`: только амортизируемые; `False`: только без.
+  - `coupon_type` — `"fixed"` (фиксированный), `"float"` (плавающий),
+    `"amortization"` (амортизируемые).
+  - `coupon_freq_min`, `coupon_freq_max` — купонов в год (1, 2, 4, 6, 12).
+  - `currency` — валюта номинала (`SUR`, `USD`, `EUR`, `CNY`).
+  - `issue_volume_min`, `issue_volume_max` — объём выпуска (штук бумаг).
+  - `accrued_int_min`, `accrued_int_max` — НКД (₽ за бумагу).
+  - `rating_min` — минимальный рейтинг Эксперт РА (`ruBBB-` = investment grade).
+    Загружается с задержкой при первом вызове, кэш 4 ч.
+  - `sector` — MOEX-сектор эмитента (`Финансовый`, `Нефтегазовый` и т.д.).
+    Ограничение: карта секторов покрывает ~100 крупнейших эмитентов.
+  - `include_qualified` — `True`: добавить поле `is_qualified`
+    (ISQUALIFIEDINVESTORS). Доп. запрос на каждую бумагу (параллельно, до 200).
+  - `qualified_only` — `True`: только для квалифицированных; `False`: только для
+    неквалифицированных. Требует `include_qualified=True`.
+  - `sort_by` — поле сортировки: `ytm`, `duration`, `maturity`, `price`,
+    `coupon`, `issue_volume`. По умолчанию `ytm`.
+  - `sort_desc` — `True` = по убыванию (по умолчанию).
+  - `limit` — максимум результатов (1..500, по умолчанию 50).
+- **Возвращает:** `{count_shown, count_total_matching, count_all_bonds, bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm, coupon_pct, coupon_freq, duration_years, mod_duration_years, maturity, years_to_maturity, offer_date, has_offer, bond_type, is_amortization, face_unit, face_value, accrued_int, issue_size, issue_size_placed, list_level, value_today, vol_today, num_trades, bid_ask_spread_pct, rating?, sector?, is_qualified?}]}`.
+  - `bond_type` — ISS-классификация: `Фикс с известным купоном`,
+    `Фикс с неизвестным купоном`, `Флоатер`, `Амортизируемые облигации`,
+    `Валютные облигации`.
+  - `is_amortization` — `True` если `bond_type` = амортизируемые.
+  - `has_offer` — `True` если есть дата оферты (put/call).
+  - `value_today` — оборот в ₽ за текущую сессию.
+  - `bid_ask_spread_pct` — спред bid/ask из marketdata (%).
+- **Пример:** `bond_screener(ytm_min=12, ytm_max=20, currency="SUR", coupon_type="fixed", has_offer=False, sort_by="ytm", sort_desc=True, limit=10)` → 325 облигаций; лучшая 19.9% YTM.
+- **Использование:** предварительный отбор облигаций по портфелю; для глубокого
+  анализа отобранных бумаг → `bond_report`.
 
 ### 🧮 `price_volatility(query, days=90, rf_annual=16.0)`
 Волатильность, Sharpe ratio, max drawdown по дневным свечам.

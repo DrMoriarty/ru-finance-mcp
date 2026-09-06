@@ -45,7 +45,7 @@ ROLES: dict[str, set[str]] = {
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
         "moex_bond_market_aggregates", "moex_zcyc_history",
-        "bond_report", "bond_accrued_interest", "bond_synthetic_yield",
+        "bond_report", "bond_accrued_interest", "bond_synthetic_yield", "bond_screener",
         "raexpert_rating", "raexpert_emitent_ratings",
         "zpif_payments", "zpif_funds_list",
         "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
@@ -1111,6 +1111,99 @@ async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
     result["query"] = query
     result["secid"] = b.get("secid")
     result["shortname"] = b.get("shortname")
+    return result
+
+
+@mcp.tool()
+async def bond_screener(
+    ctx: Context,
+    ytm_min: float | None = None,
+    ytm_max: float | None = None,
+    coupon_min: float | None = None,
+    coupon_max: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    maturity_from: str | None = None,
+    maturity_to: str | None = None,
+    duration_min: float | None = None,
+    duration_max: float | None = None,
+    has_offer: bool | None = None,
+    has_amortization: bool | None = None,
+    coupon_type: str | None = None,
+    coupon_freq_min: int | None = None,
+    coupon_freq_max: int | None = None,
+    currency: str | None = None,
+    issue_volume_min: int | None = None,
+    issue_volume_max: int | None = None,
+    accrued_int_min: float | None = None,
+    accrued_int_max: float | None = None,
+    rating_min: str | None = None,
+    sector: str | None = None,
+    include_qualified: bool = False,
+    qualified_only: bool | None = None,
+    sort_by: str = "ytm",
+    sort_desc: bool = True,
+    limit: int = 50,
+) -> dict:
+    """Bond screener: filter MOEX bonds by multiple criteria simultaneously.
+
+    Loads all bonds from TQCB (corporate) and TQOB (OFZ) boards, applies
+    filters, optionally enriches with Expert RA credit ratings and
+    qualified-investor status.
+
+    Args:
+        ytm_min/ytm_max — yield to maturity (%), inclusive bounds.
+        coupon_min/coupon_max — coupon rate (%), inclusive.
+        price_min/price_max — clean price (% of face), inclusive.
+        maturity_from/maturity_to — maturity date ('YYYY-MM-DD').
+        duration_min/duration_max — Macaulay duration (years).
+        has_offer — True: only bonds with offer/call/put dates; False: without.
+        has_amortization — True: only amortizing bonds; False: only bullet.
+        coupon_type — 'fixed' (fixed), 'float' (floating), 'amortization' (amortizing).
+        coupon_freq_min/coupon_freq_max — coupon payments per year (1,2,4,6,12).
+        currency — face value currency ('SUR', 'USD', 'EUR', 'CNY').
+        issue_volume_min/issue_volume_max — issue size (number of bonds).
+        accrued_int_min/accrued_int_max — accrued interest (RUB per bond).
+        rating_min — minimum Expert RA rating ('ruBBB-' = investment grade).
+            Ratings from raexpert.ru, 4h cache. Does not cover all issuers.
+        sector — MOEX sector of the issuer (e.g. 'Финансовый', 'Нефтегазовый').
+            Covers ~100 largest issuers via MOEX sector indices.
+        include_qualified — add is_qualified field (ISQUALIFIEDINVESTORS).
+            Adds a per-bond ISS request (parallel, max 200).
+        qualified_only — True: only qualified-investor bonds; False: only
+            regular-investor bonds; None: no filter. Requires include_qualified=True.
+        sort_by — sort field: 'ytm', 'duration', 'maturity', 'price', 'coupon',
+            'issue_volume'. Default 'ytm'.
+        sort_desc — True = descending (default).
+        limit — max results (1..500, default 50).
+
+    Returns: {count_shown, count_total_matching, count_all_bonds,
+    bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm,
+    coupon_pct, coupon_freq, duration_years, mod_duration_years,
+    maturity, years_to_maturity, offer_date, has_offer,
+    bond_type, is_amortization, face_unit, face_value, accrued_int,
+    issue_size, issue_size_placed, list_level,
+    value_today, vol_today, num_trades, bid_ask_spread_pct,
+    rating, sector, is_qualified?}]}.
+    """
+    await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
+    result = moex.bond_screener(
+        ytm_min=ytm_min, ytm_max=ytm_max,
+        coupon_min=coupon_min, coupon_max=coupon_max,
+        price_min=price_min, price_max=price_max,
+        maturity_from=maturity_from, maturity_to=maturity_to,
+        duration_min=duration_min, duration_max=duration_max,
+        has_offer=has_offer, has_amortization=has_amortization,
+        coupon_type=coupon_type,
+        coupon_freq_min=coupon_freq_min, coupon_freq_max=coupon_freq_max,
+        currency=currency,
+        issue_volume_min=issue_volume_min, issue_volume_max=issue_volume_max,
+        accrued_int_min=accrued_int_min, accrued_int_max=accrued_int_max,
+        rating_min=rating_min, sector=sector,
+        include_qualified=include_qualified, qualified_only=qualified_only,
+        sort_by=sort_by, sort_desc=sort_desc, limit=limit,
+    )
+    await ctx.report_progress(3, 3, "Done")
     return result
 
 
