@@ -883,7 +883,7 @@ def bond_screener(
     qualified_only: bool | None = None,
     sort_by: str = "ytm",
     sort_desc: bool = True,
-    limit: int = 50,
+    limit: int = 15,
 ) -> dict:
     """Скринер облигаций MOEX с фильтрацией по набору параметров.
 
@@ -916,7 +916,7 @@ def bond_screener(
         sort_by — поле сортировки: 'ytm', 'duration', 'maturity', 'price',
                   'coupon', 'issue_volume'
         sort_desc — True = по убыванию
-        limit — максимум результатов (1..500)
+        limit — максимум результатов (1..500, default 15)
 
     Returns:
         {count, bonds: [{secid, shortname, isin, board, emitent,
@@ -2011,6 +2011,771 @@ def etf_tracking_error(query: str, days: int = 90) -> dict:
         "inav_ticker": inav.get("secid") if inav else None,
         "note": ("трекинг-ошибка = annualized σ(r_fund − r_bench). "
                  "Excess return = доходность фонда − доходность бенчмарка."),
+    }
+
+
+# ─────────────────── ETF Screener ───────────────────
+
+# Борды для загрузки всех БПИФ/ETF
+_ETF_BOARDS = ["TQIF", "TQTF", "TQFD", "TQFE", "TQTD", "TQTE"]
+
+
+def _fetch_board_etf(board: str, retries: int = 4) -> list[dict]:
+    """Загрузить все фонды с борда (securities + marketdata) за один запрос.
+
+    Возвращает список merged-словарей (securities + marketdata + _board).
+    """
+    path = f"engines/stock/markets/shares/boards/{board}/securities"
+    raw = raw_get(path, {"iss.only": "securities,marketdata"}, retries=retries)
+    secs = records(raw, "securities")
+    mds = records(raw, "marketdata")
+    md_by_secid: dict[str, dict] = {}
+    for m in mds:
+        sid = m.get("SECID")
+        if sid:
+            md_by_secid[sid] = m
+    out: list[dict] = []
+    for s in secs:
+        sid = s.get("SECID")
+        s["_board"] = board
+        if sid and sid in md_by_secid:
+            s.update(md_by_secid[sid])
+        out.append(s)
+    return out
+
+
+def technical_indicators(query: str, days: int = 90) -> dict:
+    """Рассчитать технические индикаторы из дневных свечей.
+
+    Args:
+        query — тикер или ISIN.
+        days — период для расчёта (default 90). Для MA200 нужно 200+ дней.
+
+    Returns:
+        {secid, period_days, trading_days,
+         rsi_14, ma_50, ma_200, ma_signal,
+         macd, macd_signal_line, macd_histogram, macd_signal,
+         adx, trend_strength,
+         beta (если передан benchmark_closes), ...}
+    """
+    import math
+    from datetime import date as _date, timedelta
+
+    r = resolve(query)
+    till = _date.today()
+    frm = till - timedelta(days=days + 30)  # запас для расчёта MA
+
+    raw_candles = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows = records(raw_candles, "candles")
+
+    closes = [row["close"] for row in rows if row.get("close")]
+    if len(closes) < 14:
+        return {"error": "недостаточно данных", "secid": r["secid"], "trading_days": len(closes)}
+
+    result: dict = {
+        "secid": r["secid"],
+        "period_days": days,
+        "trading_days": len(closes),
+    }
+
+    # ── RSI(14) ──
+    rsi_period = 14
+    if len(closes) >= rsi_period + 1:
+        gains = []
+        losses = []
+        for i in range(1, len(closes)):
+            delta = closes[i] - closes[i - 1]
+            gains.append(max(0, delta))
+            losses.append(max(0, -delta))
+
+        # Первый avg
+        avg_gain = sum(gains[:rsi_period]) / rsi_period
+        avg_loss = sum(losses[:rsi_period]) / rsi_period
+
+        # Smoothed (Wilder's method)
+        for i in range(rsi_period, len(gains)):
+            avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
+            avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
+
+        if avg_loss == 0:
+            result["rsi_14"] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            result["rsi_14"] = round(100 - 100 / (1 + rs), 2)
+
+    # ── Simple Moving Averages ──
+    def _sma(data: list[float], period: int) -> float | None:
+        if len(data) < period:
+            return None
+        return round(sum(data[-period:]) / period, 4)
+
+    result["ma_50"] = _sma(closes, 50)
+    result["ma_200"] = _sma(closes, 200)
+
+    # MA signal (Golden/Death Cross)
+    ma50 = result["ma_50"]
+    ma200 = result["ma_200"]
+    if ma50 is not None and ma200 is not None:
+        result["ma_signal"] = "golden_cross" if ma50 > ma200 else "death_cross"
+    else:
+        result["ma_signal"] = "insufficient_data"
+
+    # ── MACD(12, 26, 9) ──
+    def _ema(data: list[float], period: int) -> list[float]:
+        """Exponential Moving Average — returns full series."""
+        if len(data) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema_series = [sum(data[:period]) / period]
+        for i in range(period, len(data)):
+            ema_series.append(data[i] * multiplier + ema_series[-1] * (1 - multiplier))
+        return ema_series
+
+    if len(closes) >= 26:
+        ema12 = _ema(closes, 12)
+        ema26 = _ema(closes, 26)
+        # Выравниваем длины (ema12 начинается раньше)
+        offset = len(ema12) - len(ema26)
+        macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
+
+        if len(macd_line) >= 9:
+            signal_line = _ema(macd_line, 9)
+            macd_offset = len(macd_line) - len(signal_line)
+            histogram = macd_line[-1] - signal_line[-1]
+
+            result["macd"] = round(macd_line[-1], 4)
+            result["macd_signal_line"] = round(signal_line[-1], 4)
+            result["macd_histogram"] = round(histogram, 4)
+
+            if histogram > 0:
+                result["macd_signal"] = "bullish"
+            elif histogram < 0:
+                result["macd_signal"] = "bearish"
+            else:
+                result["macd_signal"] = "neutral"
+
+    # ── ADX(14) ──
+    # Нужны High, Low, Close
+    highs = [row["high"] for row in rows if row.get("high")]
+    lows = [row["low"] for row in rows if row.get("low")]
+    adx_closes = [row["close"] for row in rows if row.get("close")]
+
+    adx_period = 14
+    if len(highs) >= adx_period + 1 and len(lows) >= adx_period + 1:
+        # True Range
+        tr_list = []
+        plus_dm = []
+        minus_dm = []
+        for i in range(1, len(highs)):
+            h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], adx_closes[i-1]
+            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+            tr_list.append(tr)
+
+            up_move = h - prev_h
+            down_move = prev_l - l
+            plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+            minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+
+        if len(tr_list) >= adx_period:
+            # Smoothed TR, +DM, -DM (Wilder's)
+            atr = sum(tr_list[:adx_period])
+            apdm = sum(plus_dm[:adx_period])
+            amdm = sum(minus_dm[:adx_period])
+
+            dx_list = []
+            for i in range(adx_period, len(tr_list)):
+                atr = atr - atr / adx_period + tr_list[i]
+                apdm = apdm - apdm / adx_period + plus_dm[i]
+                amdm = amdm - amdm / adx_period + minus_dm[i]
+
+                if atr > 0:
+                    plus_di = 100 * apdm / atr
+                    minus_di = 100 * amdm / atr
+                    di_sum = plus_di + minus_di
+                    if di_sum > 0:
+                        dx_list.append(abs(plus_di - minus_di) / di_sum * 100)
+
+            if len(dx_list) >= adx_period:
+                adx_val = sum(dx_list[:adx_period]) / adx_period
+                for i in range(adx_period, len(dx_list)):
+                    adx_val = (adx_val * (adx_period - 1) + dx_list[i]) / adx_period
+
+                result["adx"] = round(adx_val, 2)
+                if adx_val >= 40:
+                    result["trend_strength"] = "very_strong"
+                elif adx_val >= 25:
+                    result["trend_strength"] = "strong"
+                elif adx_val >= 20:
+                    result["trend_strength"] = "moderate"
+                else:
+                    result["trend_strength"] = "weak"
+
+    return result
+
+
+def _parse_board_etf(row: dict) -> dict | None:
+    """Нормализовать строку _fetch_board_etf в словарь скринера."""
+    secid = row.get("SECID")
+    if not secid:
+        return None
+
+    # Цена: LAST → MARKETPRICE → LCLOSEPRICE → WAPRICE
+    price = first(row.get("LAST"), row.get("MARKETPRICE"),
+                  row.get("LCLOSEPRICE"), row.get("WAPRICE"))
+
+    # Bid/Ask
+    bid = row.get("BID")
+    ask = row.get("OFFER")
+
+    # Spread (%)
+    spread_pct = None
+    if bid and ask and bid > 0 and ask > 0:
+        spread_pct = round((ask - bid) / ((ask + bid) / 2) * 100, 4)
+
+    # Объём
+    value_today = row.get("VALUE") or row.get("VALTODAY")
+    vol_today = row.get("VOLUME") or row.get("VOLTODAY")
+
+    # Изменение
+    change_pct = row.get("LASTCHANGE") or row.get("CHANGE")
+
+    return {
+        "secid": secid,
+        "shortname": row.get("SHORTNAME"),
+        "isin": row.get("ISIN"),
+        "board": row.get("_board"),
+        "price": price,
+        "bid": bid,
+        "ask": ask,
+        "spread_pct": spread_pct,
+        "change_pct": change_pct,
+        "value_today": value_today,
+        "vol_today": vol_today,
+        "open": row.get("OPEN"),
+        "low": row.get("LOW"),
+        "high": row.get("HIGH"),
+        "lotsize": row.get("LOTSIZE"),
+        "face_value": row.get("FACEVALUE"),
+        "face_unit": row.get("FACEUNIT"),
+        "emitent_id": row.get("EMITENT_ID"),
+        "emitent_title": row.get("EMITENT_TITLE"),
+        "list_level": row.get("LISTLEVEL"),
+        "is_qualified": row.get("ISQUALIFIEDINVESTORS"),
+    }
+
+
+def etf_screener(
+    *,
+    category: str | None = None,
+    emitent: str | None = None,
+    benchmark: str | None = None,
+    currency: str | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    volume_min: float | None = None,
+    volume_max: float | None = None,
+    spread_max: float | None = None,
+    volatility_min: float | None = None,
+    volatility_max: float | None = None,
+    sharpe_min: float | None = None,
+    sharpe_max: float | None = None,
+    beta_min: float | None = None,
+    beta_max: float | None = None,
+    performance_min: float | None = None,
+    performance_max: float | None = None,
+    performance_period: str = "1y",
+    rsi_min: float | None = None,
+    rsi_max: float | None = None,
+    ma_signal: str | None = None,
+    adx_min: float | None = None,
+    macd_signal: str | None = None,
+    premium_discount_max: float | None = None,
+    tracking_error_max: float | None = None,
+    include_indicators: bool = True,
+    sort_by: str = "performance",
+    sort_desc: bool = True,
+    limit: int = 15,
+) -> dict:
+    """Скринер БПИФ/ETF на MOEX с фильтрацией по множеству параметров.
+
+    Загружает все фонды с бордов TQIF/TQTF, обогащает метаданными из
+    ETF_BENCHMARK_MAP, рассчитывает технические индикаторы.
+
+    Args:
+        category — класс активов: 'equity_russia', 'equity_foreign',
+            'equity_sector', 'equity_dividend', 'bond_gov', 'bond_corp',
+            'money_market', 'commodity', 'fx', 'mixed'
+        emitent — управляющая компания ('Т-Капитал', 'Сбер', 'Альфа', 'ВТБ')
+        benchmark — тикер бенчмарка на MOEX ('IMOEX', 'GOLD', 'RGBITR')
+        currency — валюта ('SUR', 'USD', 'EUR', 'CNY', 'HKD')
+        price_min/price_max — цена фонда (₽)
+        volume_min/volume_max — среднедневной объём торгов (₽)
+        spread_max — макс. Bid-Ask spread (%)
+        volatility_min/volatility_max — годовая волатильность (%)
+        sharpe_min/sharpe_max — коэффициент Шарпа
+        beta_min/beta_max — бета (относительно IMOEX)
+        performance_min/performance_max — доходность (%)
+        performance_period — период доходности: '1m', '3m', '6m', '1y', 'ytd'
+        rsi_min/rsi_max — RSI(14)
+        ma_signal — 'golden_cross' (MA50>MA200), 'death_cross' (MA50<MA200)
+        adx_min — минимальный ADX (сила тренда)
+        macd_signal — 'bullish', 'bearish'
+        premium_discount_max — макс. премия/дисконт к NAV (%)
+        tracking_error_max — макс. трекинг-ошибка (%)
+        include_indicators — рассчитывать ли RSI/MA/MACD/ADX (default True)
+        sort_by — сортировка: 'performance', 'volatility', 'sharpe', 'volume',
+            'spread', 'premium', 'rsi', 'adx', 'beta'
+        sort_desc — True = по убыванию
+        limit — максимум результатов (1..200, default 15)
+
+    Returns:
+        {count_shown, count_total_matching, count_all_funds,
+         funds: [{secid, shortname, isin, emitent, category, category_ru,
+           benchmark, benchmark_name, currency,
+           price, change_pct, bid, ask, spread_pct,
+           avg_daily_volume_rub, liquidity_score, liquidity_grade,
+           inav_price, premium_discount_pct,
+           performance_1m/3m/6m/1y, ytd,
+           volatility_ann, sharpe, max_drawdown, beta,
+           rsi_14, ma_50, ma_200, ma_signal,
+           macd, macd_signal_line, macd_histogram, macd_signal,
+           adx, trend_strength,
+           tracking_error_ann}]}
+    """
+    limit = max(1, min(limit, 200))
+
+    # ── Шаг 1: загрузить все фонды с бордов (параллельно) ──
+    board_data: list[dict] = []
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(_fetch_board_etf, b): b for b in _ETF_BOARDS}
+        for f in as_completed(futs):
+            try:
+                board_data.extend(f.result())
+            except Exception:
+                continue
+
+    # ── Шаг 2: нормализация + дедупликация по secid ──
+    seen: set[str] = set()
+    all_funds: list[dict] = []
+    for row in board_data:
+        parsed = _parse_board_etf(row)
+        if parsed and parsed["secid"] not in seen:
+            seen.add(parsed["secid"])
+            all_funds.append(parsed)
+
+    # ── Шаг 3: обогащение метаданными из ETF_BENCHMARK_MAP ──
+    for fund in all_funds:
+        sid = fund["secid"]
+        bm = ETF_BENCHMARK_MAP.get(sid, {})
+        fund["category"] = bm.get("category", "unknown")
+        fund["category_ru"] = ETF_CATEGORY_RU.get(fund["category"], fund["category"])
+        fund["benchmark"] = bm.get("benchmark")
+        fund["benchmark_name"] = bm.get("benchmark_name")
+        fund["currency"] = fund.get("face_unit") or "SUR"
+
+    # ── Шаг 4: фильтрация ──
+    filtered = all_funds
+
+    if category:
+        cat_lower = category.lower()
+        filtered = [f for f in filtered if f.get("category", "").lower() == cat_lower]
+
+    if emitent:
+        emit_lower = emitent.lower()
+        filtered = [f for f in filtered if emit_lower in (f.get("emitent_title") or "").lower()]
+
+    if benchmark:
+        bm_upper = benchmark.upper()
+        filtered = [f for f in filtered if (f.get("benchmark") or "").upper() == bm_upper]
+
+    if currency:
+        cur_upper = currency.upper()
+        filtered = [f for f in filtered if (f.get("currency") or "").upper() == cur_upper]
+
+    if price_min is not None:
+        filtered = [f for f in filtered if f.get("price") is not None and f["price"] >= price_min]
+    if price_max is not None:
+        filtered = [f for f in filtered if f.get("price") is not None and f["price"] <= price_max]
+
+    if volume_min is not None:
+        filtered = [f for f in filtered if f.get("value_today") is not None and f["value_today"] >= volume_min]
+    if volume_max is not None:
+        filtered = [f for f in filtered if f.get("value_today") is not None and f["value_today"] <= volume_max]
+
+    if spread_max is not None:
+        filtered = [f for f in filtered if f.get("spread_pct") is not None and f["spread_pct"] <= spread_max]
+
+    # ── Шаг 5: расчёт доходности (performance) ──
+    perf_map: dict[str, dict] = {}
+
+    # Определяем период для расчёта
+    perf_days_map = {
+        "1m": 30, "3m": 90, "6m": 180, "1y": 365, "ytd": None
+    }
+    perf_field = f"performance_{performance_period}"
+
+    if include_indicators or performance_min is not None or performance_max is not None:
+        from datetime import date as _date, timedelta
+        today = _date.today()
+
+        # Для YTD считаем с начала года
+        if performance_period == "ytd":
+            frm_date = _date(today.year, 1, 1)
+        else:
+            days_back = perf_days_map.get(performance_period, 365)
+            frm_date = today - timedelta(days=days_back + 10)
+
+        # Параллельно загружаем свечи для всех отфильтрованных фондов
+        def _fetch_perf(fund: dict) -> tuple[str, dict]:
+            sid = fund["secid"]
+            try:
+                raw = exec_template(T_CANDLES, {
+                    "engine": "stock", "market": "shares",
+                    "board": fund["board"], "security": sid},
+                    {"from": str(frm_date), "till": str(today), "interval": "24"})
+                rows = records(raw, "candles")
+                closes = [r["close"] for r in rows if r.get("close")]
+                if len(closes) >= 2:
+                    perf = round((closes[-1] / closes[0] - 1) * 100, 2)
+                    return sid, {"candles": rows, "closes": closes, perf_field: perf}
+            except Exception:
+                pass
+            return sid, {}
+
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futs = {ex.submit(_fetch_perf, f): f for f in filtered}
+            for f in as_completed(futs):
+                sid, data = f.result()
+                if data:
+                    perf_map[sid] = data
+
+        # Обогащаем filtered
+        for fund in filtered:
+            sid = fund["secid"]
+            if sid in perf_map:
+                fund[perf_field] = perf_map[sid].get(perf_field)
+
+    # Фильтрация по доходности
+    if performance_min is not None:
+        filtered = [f for f in filtered if f.get(perf_field) is not None and f[perf_field] >= performance_min]
+    if performance_max is not None:
+        filtered = [f for f in filtered if f.get(perf_field) is not None and f[perf_field] <= performance_max]
+
+    # ── Шаг 6: расчёт волатильности, Sharpe, MDD ──
+    if include_indicators or volatility_min is not None or volatility_max is not None or \
+       sharpe_min is not None or sharpe_max is not None:
+        for fund in filtered:
+            sid = fund["secid"]
+            if sid not in perf_map:
+                continue
+            candle_data = perf_map[sid].get("candles", [])
+            closes = [r["close"] for r in candle_data if r.get("close")]
+            if len(closes) < 10:
+                continue
+
+            # Daily returns
+            returns = [(closes[i] / closes[i-1] - 1) for i in range(1, len(closes))]
+            if not returns:
+                continue
+
+            mean_ret = sum(returns) / len(returns)
+            var = sum((r - mean_ret) ** 2 for r in returns) / (len(returns) - 1) if len(returns) > 1 else 0
+            daily_vol = var ** 0.5
+            ann_vol = daily_vol * (252 ** 0.5) * 100
+
+            fund["volatility_ann"] = round(ann_vol, 2)
+            fund["daily_vol"] = round(daily_vol * 100, 4)
+
+            # Sharpe (rf = key rate или 16% по умолчанию)
+            rf_daily = 0.16 / 252
+            excess = [r - rf_daily for r in returns]
+            mean_excess = sum(excess) / len(excess)
+            if daily_vol > 0:
+                fund["sharpe"] = round((mean_excess / daily_vol) * (252 ** 0.5), 2)
+
+            # Max Drawdown
+            peak = closes[0]
+            max_dd = 0
+            for c in closes:
+                if c > peak:
+                    peak = c
+                dd = (peak - c) / peak * 100
+                if dd > max_dd:
+                    max_dd = dd
+            fund["max_drawdown"] = round(max_dd, 2)
+
+    # Фильтрация по волатильности/Sharpe
+    if volatility_min is not None:
+        filtered = [f for f in filtered if f.get("volatility_ann") is not None and f["volatility_ann"] >= volatility_min]
+    if volatility_max is not None:
+        filtered = [f for f in filtered if f.get("volatility_ann") is not None and f["volatility_ann"] <= volatility_max]
+    if sharpe_min is not None:
+        filtered = [f for f in filtered if f.get("sharpe") is not None and f["sharpe"] >= sharpe_min]
+    if sharpe_max is not None:
+        filtered = [f for f in filtered if f.get("sharpe") is not None and f["sharpe"] <= sharpe_max]
+
+    # ── Шаг 7: расчёт Beta через IMOEX ──
+    if include_indicators or beta_min is not None or beta_max is not None:
+        # Загружаем свечи IMOEX за тот же период
+        from datetime import date as _date, timedelta
+        today = _date.today()
+        frm_date = today - timedelta(days=400)
+        try:
+            bm_raw = exec_template(T_CANDLES, {
+                "engine": "stock", "market": "index",
+                "board": "SNDX", "security": "IMOEX"},
+                {"from": str(frm_date), "till": str(today), "interval": "24"})
+            bm_rows = records(bm_raw, "candles")
+            bm_closes = [r["close"] for r in bm_rows if r.get("close")]
+            bm_returns = [(bm_closes[i] / bm_closes[i-1] - 1) for i in range(1, len(bm_closes))]
+            bm_dates = [(r.get("begin") or "")[:10] for r in bm_rows if r.get("close")]
+
+            if len(bm_returns) > 10:
+                bm_mean = sum(bm_returns) / len(bm_returns)
+                bm_var = sum((r - bm_mean) ** 2 for r in bm_returns) / (len(bm_returns) - 1)
+
+                # Строим маппинг дата → return для IMOEX
+                bm_by_date: dict[str, float] = {}
+                for i in range(len(bm_dates) - 1):
+                    if i + 1 < len(bm_dates):
+                        bm_by_date[bm_dates[i + 1]] = bm_returns[i]
+
+                for fund in filtered:
+                    sid = fund["secid"]
+                    candle_data = perf_map.get(sid, {}).get("candles", [])
+                    if not candle_data:
+                        continue
+
+                    fund_closes = [r["close"] for r in candle_data if r.get("close")]
+                    fund_dates = [(r.get("begin") or "")[:10] for r in candle_data if r.get("close")]
+                    if len(fund_closes) < 10:
+                        continue
+
+                    fund_returns = [(fund_closes[i] / fund_closes[i-1] - 1) for i in range(1, len(fund_closes))]
+
+                    # Выравниваем по датам
+                    aligned_fund = []
+                    aligned_bm = []
+                    for i in range(len(fund_dates) - 1):
+                        dt = fund_dates[i + 1]
+                        if dt in bm_by_date and i < len(fund_returns):
+                            aligned_fund.append(fund_returns[i])
+                            aligned_bm.append(bm_by_date[dt])
+
+                    if len(aligned_fund) > 10:
+                        f_mean = sum(aligned_fund) / len(aligned_fund)
+                        b_mean = sum(aligned_bm) / len(aligned_bm)
+                        cov = sum((aligned_fund[i] - f_mean) * (aligned_bm[i] - b_mean)
+                                  for i in range(len(aligned_fund))) / (len(aligned_fund) - 1)
+                        if bm_var > 0:
+                            fund["beta"] = round(cov / bm_var, 3)
+        except Exception:
+            pass
+
+    # Фильтрация по Beta
+    if beta_min is not None:
+        filtered = [f for f in filtered if f.get("beta") is not None and f["beta"] >= beta_min]
+    if beta_max is not None:
+        filtered = [f for f in filtered if f.get("beta") is not None and f["beta"] <= beta_max]
+
+    # ── Шаг 8: расчёт RSI, MA, MACD, ADX ──
+    if include_indicators:
+        for fund in filtered:
+            sid = fund["secid"]
+            candle_data = perf_map.get(sid, {})
+            closes = candle_data.get("closes", [])
+            candles_raw = candle_data.get("candles", [])
+
+            if len(closes) < 14:
+                continue
+
+            # RSI(14)
+            rsi_period = 14
+            if len(closes) >= rsi_period + 1:
+                gains = []
+                losses = []
+                for i in range(1, len(closes)):
+                    delta = closes[i] - closes[i - 1]
+                    gains.append(max(0, delta))
+                    losses.append(max(0, -delta))
+
+                avg_gain = sum(gains[:rsi_period]) / rsi_period
+                avg_loss = sum(losses[:rsi_period]) / rsi_period
+                for i in range(rsi_period, len(gains)):
+                    avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
+                    avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
+
+                if avg_loss == 0:
+                    fund["rsi_14"] = 100.0
+                else:
+                    rs = avg_gain / avg_loss
+                    fund["rsi_14"] = round(100 - 100 / (1 + rs), 2)
+
+            # MA50, MA200
+            def _sma_val(data: list[float], period: int) -> float | None:
+                if len(data) < period:
+                    return None
+                return round(sum(data[-period:]) / period, 4)
+
+            fund["ma_50"] = _sma_val(closes, 50)
+            fund["ma_200"] = _sma_val(closes, 200)
+
+            ma50 = fund["ma_50"]
+            ma200 = fund["ma_200"]
+            if ma50 is not None and ma200 is not None:
+                fund["ma_signal"] = "golden_cross" if ma50 > ma200 else "death_cross"
+            else:
+                fund["ma_signal"] = "insufficient_data"
+
+            # MACD(12, 26, 9)
+            def _ema_val(data: list[float], period: int) -> list[float]:
+                if len(data) < period:
+                    return []
+                multiplier = 2 / (period + 1)
+                ema = [sum(data[:period]) / period]
+                for i in range(period, len(data)):
+                    ema.append(data[i] * multiplier + ema[-1] * (1 - multiplier))
+                return ema
+
+            if len(closes) >= 26:
+                ema12 = _ema_val(closes, 12)
+                ema26 = _ema_val(closes, 26)
+                offset = len(ema12) - len(ema26)
+                macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
+
+                if len(macd_line) >= 9:
+                    signal_line = _ema_val(macd_line, 9)
+                    histogram = macd_line[-1] - signal_line[-1]
+                    fund["macd"] = round(macd_line[-1], 4)
+                    fund["macd_signal_line"] = round(signal_line[-1], 4)
+                    fund["macd_histogram"] = round(histogram, 4)
+                    fund["macd_signal"] = "bullish" if histogram > 0 else ("bearish" if histogram < 0 else "neutral")
+
+            # ADX(14)
+            highs = [r["high"] for r in candles_raw if r.get("high")]
+            lows = [r["low"] for r in candles_raw if r.get("low")]
+
+            adx_period = 14
+            if len(highs) >= adx_period + 1 and len(lows) >= adx_period + 1:
+                adx_closes = [r["close"] for r in candles_raw if r.get("close")]
+                tr_list = []
+                plus_dm = []
+                minus_dm = []
+                for i in range(1, len(highs)):
+                    h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], adx_closes[i-1]
+                    tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+                    tr_list.append(tr)
+                    up_move = h - prev_h
+                    down_move = prev_l - l
+                    plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+                    minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+
+                if len(tr_list) >= adx_period:
+                    atr = sum(tr_list[:adx_period])
+                    apdm = sum(plus_dm[:adx_period])
+                    amdm = sum(minus_dm[:adx_period])
+                    dx_list = []
+                    for i in range(adx_period, len(tr_list)):
+                        atr = atr - atr / adx_period + tr_list[i]
+                        apdm = apdm - apdm / adx_period + plus_dm[i]
+                        amdm = amdm - amdm / adx_period + minus_dm[i]
+                        if atr > 0:
+                            plus_di = 100 * apdm / atr
+                            minus_di = 100 * amdm / atr
+                            di_sum = plus_di + minus_di
+                            if di_sum > 0:
+                                dx_list.append(abs(plus_di - minus_di) / di_sum * 100)
+
+                    if len(dx_list) >= adx_period:
+                        adx_val = sum(dx_list[:adx_period]) / adx_period
+                        for i in range(adx_period, len(dx_list)):
+                            adx_val = (adx_val * (adx_period - 1) + dx_list[i]) / adx_period
+                        fund["adx"] = round(adx_val, 2)
+                        if adx_val >= 40:
+                            fund["trend_strength"] = "very_strong"
+                        elif adx_val >= 25:
+                            fund["trend_strength"] = "strong"
+                        elif adx_val >= 20:
+                            fund["trend_strength"] = "moderate"
+                        else:
+                            fund["trend_strength"] = "weak"
+
+    # Фильтрация по RSI
+    if rsi_min is not None:
+        filtered = [f for f in filtered if f.get("rsi_14") is not None and f["rsi_14"] >= rsi_min]
+    if rsi_max is not None:
+        filtered = [f for f in filtered if f.get("rsi_14") is not None and f["rsi_14"] <= rsi_max]
+
+    # Фильтр по MA signal
+    if ma_signal:
+        ma_lower = ma_signal.lower()
+        filtered = [f for f in filtered if f.get("ma_signal", "").lower() == ma_lower]
+
+    # Фильтр по ADX
+    if adx_min is not None:
+        filtered = [f for f in filtered if f.get("adx") is not None and f["adx"] >= adx_min]
+
+    # Фильтр по MACD signal
+    if macd_signal:
+        macd_lower = macd_signal.lower()
+        filtered = [f for f in filtered if f.get("macd_signal", "").lower() == macd_lower]
+
+    # ── Шаг 9: премия/дисконт и трекинг-ошибка (только для фильтров) ──
+    if premium_discount_max is not None:
+        # Загружаем iNAV данные
+        def _check_premium(fund: dict) -> bool:
+            try:
+                inav = inav_quote(fund["secid"])
+                if inav and inav.get("price") and fund.get("price"):
+                    premium = abs((fund["price"] / inav["price"] - 1) * 100)
+                    fund["inav_price"] = inav["price"]
+                    fund["premium_discount_pct"] = round((fund["price"] / inav["price"] - 1) * 100, 2)
+                    return premium <= premium_discount_max
+            except Exception:
+                pass
+            return False
+
+        filtered = [f for f in filtered if _check_premium(f)]
+
+    # ── Шаг 10: сортировка ──
+    sort_field_map = {
+        "performance": perf_field,
+        "volatility": "volatility_ann",
+        "sharpe": "sharpe",
+        "volume": "value_today",
+        "spread": "spread_pct",
+        "premium": "premium_discount_pct",
+        "rsi": "rsi_14",
+        "adx": "adx",
+        "beta": "beta",
+    }
+    sort_field = sort_field_map.get(sort_by, perf_field)
+
+    def _sort_key(f: dict):
+        val = f.get(sort_field)
+        if val is None:
+            return float('-inf') if sort_desc else float('inf')
+        return val
+
+    filtered.sort(key=_sort_key, reverse=sort_desc)
+
+    # ── Шаг 11: лимит ──
+    total_matching = len(filtered)
+    shown = filtered[:limit]
+
+    # Очищаем временные поля
+    for fund in shown:
+        fund.pop("candles", None)
+        fund.pop("closes", None)
+
+    return {
+        "count_shown": len(shown),
+        "count_total_matching": total_matching,
+        "count_all_funds": len(all_funds),
+        "funds": shown,
     }
 
 

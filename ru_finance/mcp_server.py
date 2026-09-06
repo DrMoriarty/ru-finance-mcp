@@ -41,6 +41,7 @@ ROLES: dict[str, set[str]] = {
         "smartlab_stock_screener", "smartlab_company_financials",
         "smartlab_company_financials_multi",
         "price_volatility", "liquidity_assessment",
+        "etf_screener",
     },
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
@@ -660,7 +661,7 @@ async def smartlab_stock_screener(
     is_raw_stuff: int = -1,
     order_by: str = "market_cap",
     order_dir: str = "desc",
-    limit: int = 100,
+    limit: int = 15,
 ) -> list[dict]:
     """Fast fundamental stock screener for MOEX (all stocks in one request).
 
@@ -1143,7 +1144,7 @@ async def bond_screener(
     qualified_only: bool | None = None,
     sort_by: str = "ytm",
     sort_desc: bool = True,
-    limit: int = 50,
+    limit: int = 15,
 ) -> dict:
     """Bond screener: filter MOEX bonds by multiple criteria simultaneously.
 
@@ -1175,7 +1176,7 @@ async def bond_screener(
         sort_by — sort field: 'ytm', 'duration', 'maturity', 'price', 'coupon',
             'issue_volume'. Default 'ytm'.
         sort_desc — True = descending (default).
-        limit — max results (1..500, default 50).
+        limit — max results (1..500, default 15).
 
     Returns: {count_shown, count_total_matching, count_all_bonds,
     bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm,
@@ -1278,6 +1279,118 @@ async def etf_tracking_error(query: str, ctx: Context, days: int = 90) -> dict:
     """
     await ctx.report_progress(0, 2, "Fetching fund + benchmark data")
     return moex.etf_tracking_error(query, days)
+
+
+@mcp.tool()
+async def etf_screener(
+    ctx: Context,
+    category: str | None = None,
+    emitent: str | None = None,
+    benchmark: str | None = None,
+    currency: str | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    volume_min: float | None = None,
+    volume_max: float | None = None,
+    spread_max: float | None = None,
+    volatility_min: float | None = None,
+    volatility_max: float | None = None,
+    sharpe_min: float | None = None,
+    sharpe_max: float | None = None,
+    beta_min: float | None = None,
+    beta_max: float | None = None,
+    performance_min: float | None = None,
+    performance_max: float | None = None,
+    performance_period: str = "1y",
+    rsi_min: float | None = None,
+    rsi_max: float | None = None,
+    ma_signal: str | None = None,
+    adx_min: float | None = None,
+    macd_signal: str | None = None,
+    premium_discount_max: float | None = None,
+    tracking_error_max: float | None = None,
+    include_indicators: bool = True,
+    sort_by: str = "performance",
+    sort_desc: bool = True,
+    limit: int = 15,
+) -> dict:
+    """ETF/БПИФ screener: filter MOEX funds by multiple criteria.
+
+    Loads all funds from TQIF/TQTF boards, enriches with metadata from
+    ETF_BENCHMARK_MAP, calculates technical indicators (RSI, MA, MACD, ADX).
+
+    Args:
+        category — asset class: 'equity_russia', 'equity_foreign',
+            'equity_sector', 'equity_dividend', 'bond_gov', 'bond_corp',
+            'money_market', 'commodity', 'fx', 'mixed'
+        emitent — management company: 'Т-Капитал', 'Сбер', 'Альфа', 'ВТБ'
+        benchmark — benchmark ticker on MOEX: 'IMOEX', 'GOLD', 'RGBITR'
+        currency — currency: 'SUR', 'USD', 'EUR', 'CNY', 'HKD'
+        price_min/price_max — fund price (RUB)
+        volume_min/volume_max — average daily trading volume (RUB)
+        spread_max — max Bid-Ask spread (%)
+        volatility_min/volatility_max — annualized volatility (%)
+        sharpe_min/sharpe_max — Sharpe ratio
+        beta_min/beta_max — beta (vs IMOEX)
+        performance_min/performance_max — return (%)
+        performance_period — period: '1m', '3m', '6m', '1y', 'ytd'
+        rsi_min/rsi_max — RSI(14)
+        ma_signal — 'golden_cross' (MA50>MA200), 'death_cross' (MA50<MA200)
+        adx_min — minimum ADX (trend strength)
+        macd_signal — 'bullish', 'bearish'
+        premium_discount_max — max premium/discount to NAV (%)
+        tracking_error_max — max tracking error (%)
+        include_indicators — calculate RSI/MA/MACD/ADX (default True)
+        sort_by — sort field: 'performance', 'volatility', 'sharpe', 'volume',
+            'spread', 'premium', 'rsi', 'adx', 'beta'
+        sort_desc — True = descending (default)
+        limit — max results (1..200, default 15)
+
+    Returns: {count_shown, count_total_matching, count_all_funds,
+    funds: [{secid, shortname, isin, emitent, category, category_ru,
+      benchmark, benchmark_name, currency,
+      price, change_pct, bid, ask, spread_pct,
+      avg_daily_volume_rub, liquidity_score, liquidity_grade,
+      inav_price, premium_discount_pct,
+      performance_1m/3m/6m/1y, ytd,
+      volatility_ann, sharpe, max_drawdown, beta,
+      rsi_14, ma_50, ma_200, ma_signal,
+      macd, macd_signal_line, macd_histogram, macd_signal,
+      adx, trend_strength,
+      tracking_error_ann}]}.
+    """
+    await ctx.report_progress(0, 4, "Loading all ETF/БПИФ from MOEX boards")
+    return moex.etf_screener(
+        category=category,
+        emitent=emitent,
+        benchmark=benchmark,
+        currency=currency,
+        price_min=price_min,
+        price_max=price_max,
+        volume_min=volume_min,
+        volume_max=volume_max,
+        spread_max=spread_max,
+        volatility_min=volatility_min,
+        volatility_max=volatility_max,
+        sharpe_min=sharpe_min,
+        sharpe_max=sharpe_max,
+        beta_min=beta_min,
+        beta_max=beta_max,
+        performance_min=performance_min,
+        performance_max=performance_max,
+        performance_period=performance_period,
+        rsi_min=rsi_min,
+        rsi_max=rsi_max,
+        ma_signal=ma_signal,
+        adx_min=adx_min,
+        macd_signal=macd_signal,
+        premium_discount_max=premium_discount_max,
+        tracking_error_max=tracking_error_max,
+        include_indicators=include_indicators,
+        sort_by=sort_by,
+        sort_desc=sort_desc,
+        limit=limit,
+    )
 
 
 # ─────────────────────────── Rate expectations (OFZ G-curve) ───────────────────────────

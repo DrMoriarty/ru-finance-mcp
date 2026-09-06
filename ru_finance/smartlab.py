@@ -318,7 +318,7 @@ def get_stock_screener(
     is_raw_stuff: int = -1,
     order_by: str = "market_cap",
     order_dir: str = "desc",
-    limit: int = 100,
+    limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Быстрый скринер акций ММВБ со smart-lab.ru (LTM-мультипликаторы).
 

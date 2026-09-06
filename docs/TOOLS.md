@@ -387,7 +387,7 @@ MIACR — фактические средневзвешенные ставки �
   - `sort_by` — поле сортировки: `ytm`, `duration`, `maturity`, `price`,
     `coupon`, `issue_volume`. По умолчанию `ytm`.
   - `sort_desc` — `True` = по убыванию (по умолчанию).
-  - `limit` — максимум результатов (1..500, по умолчанию 50).
+  - `limit` — максимум результатов (1..500, по умолчанию 15).
 - **Возвращает:** `{count_shown, count_total_matching, count_all_bonds, bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm, coupon_pct, coupon_freq, duration_years, mod_duration_years, maturity, years_to_maturity, offer_date, has_offer, bond_type, is_amortization, face_unit, face_value, accrued_int, issue_size, issue_size_placed, list_level, value_today, vol_today, num_trades, bid_ask_spread_pct, rating?, sector?, is_qualified?}]}`.
   - `bond_type` — ISS-классификация: `Фикс с известным купоном`,
     `Фикс с неизвестным купоном`, `Флоатер`, `Амортизируемые облигации`,
@@ -455,6 +455,48 @@ MIACR — фактические средневзвешенные ставки �
   - Бенчмарк определяется автоматически из маппинга (TMOS→IMOEX, SBMX→MOEXTR, TGLD→GOLD...).
 - **Пример:** `etf_tracking_error("TMOS", 90)` → `{"secid":"TMOS","benchmark":"IMOEX","fund_return_pct":2.17,"benchmark_return_pct":-2.80,"excess_return_pct":4.97,"tracking_error_ann_pct":18.12,...}`
 - **Использование:** оценка качества слежения за индексом; высокий tracking error может указывать на дивидендные распределения, ребалансировку или отсутствие полного совпадения с индексом.
+
+### 🧮 `etf_screener(...)` 
+Скринер БПИФ/ETF на MOEX с фильтрацией по множеству параметров и расчётом технических индикаторов.
+
+Загружает все фонды с бордов TQIF/TQTF, обогащает метаданными из `ETF_BENCHMARK_MAP`, рассчитывает RSI, MA, MACD, ADX, Beta.
+
+- **Принимает (все опционально):**
+  - `category` — класс активов: `equity_russia`, `equity_foreign`, `equity_sector`, `equity_dividend`, `bond_gov`, `bond_corp`, `money_market`, `commodity`, `fx`, `mixed`
+  - `emitent` — управляющая компания: `Т-Капитал`, `Сбер`, `Альфа`, `ВТБ`
+  - `benchmark` — тикер бенчмарка: `IMOEX`, `GOLD`, `RGBITR`
+  - `currency` — валюта: `SUR`, `USD`, `EUR`, `CNY`, `HKD`
+  - `price_min/price_max` — цена фонда (₽)
+  - `volume_min/volume_max` — среднедневной объём торгов (₽)
+  - `spread_max` — макс. Bid-Ask spread (%)
+  - `volatility_min/volatility_max` — годовая волатильность (%)
+  - `sharpe_min/sharpe_max` — коэффициент Шарпа
+  - `beta_min/beta_max` — бета (относительно IMOEX)
+  - `performance_min/performance_max` — доходность (%)
+  - `performance_period` — период: `1m`, `3m`, `6m`, `1y`, `ytd`
+  - `rsi_min/rsi_max` — RSI(14)
+  - `ma_signal` — `golden_cross` (MA50>MA200), `death_cross` (MA50<MA200)
+  - `adx_min` — минимальный ADX (сила тренда)
+  - `macd_signal` — `bullish`, `bearish`
+  - `premium_discount_max` — макс. премия/дисконт к NAV (%)
+  - `tracking_error_max` — макс. трекинг-ошибка (%)
+  - `include_indicators` — рассчитывать RSI/MA/MACD/ADX (default `true`)
+  - `sort_by` — сортировка: `performance`, `volatility`, `sharpe`, `volume`, `spread`, `premium`, `rsi`, `adx`, `beta`
+  - `sort_desc` — `true` = по убыванию (default)
+  - `limit` — максимум результатов (1..200, default 15)
+
+- **Возвращает:** `{count_shown, count_total_matching, count_all_funds, funds[]}`.
+  Каждый фонд: `{secid, shortname, isin, emitent, category, category_ru, benchmark, benchmark_name, currency, price, change_pct, bid, ask, spread_pct, value_today, vol_today, inav_price, premium_discount_pct, performance_1m/3m/6m/1y, ytd, volatility_ann, sharpe, max_drawdown, beta, rsi_14, ma_50, ma_200, ma_signal, macd, macd_signal_line, macd_histogram, macd_signal, adx, trend_strength}`.
+
+- **Примеры:**
+  - `etf_screener(category="equity_russia")` → все российские акционные фонды
+  - `etf_screener(category="commodity", sort_by="performance")` → сырьевые, отсортированные по доходности
+  - `etf_screener(sharpe_min=1.0, volatility_max=20)` → фонды с Sharpe > 1 и волатильностью < 20%
+  - `etf_screener(ma_signal="golden_cross", adx_min=25)` → сильный восходящий тренд
+  - `etf_screener(emitent="Т-Капитал")` → все фонды Т-Капитала
+  - `etf_screener(benchmark="IMOEX")` → фонды, следующие за индексом МосБиржи
+
+- **Использование:** поиск фондов по инвестиционным критериям; сравнение фондов одного класса; мониторинг технических сигналов.
 
 ---
 
