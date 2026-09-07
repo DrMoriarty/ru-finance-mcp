@@ -186,7 +186,8 @@ def _spot_via_cbr(cbr_fx: str) -> tuple[float | None, str]:
 
 def resolve(query: str, sec_type: str | None = None,
             as_list: bool = False,
-            traded_only: bool = False) -> dict | list[dict]:
+            traded_only: bool = False,
+            limit: int | None = None) -> dict | list[dict]:
     """Тикер/ISIN/название -> {secid, engine, market, board, type, ...}.
 
     sec_type — если задан (напр. "bond", "share", "fund"), фильтрует по типу
@@ -195,8 +196,9 @@ def resolve(query: str, sec_type: str | None = None,
 
     as_list — если True, возвращает все совпадения (до 200) вместо одного.
     traded_only — если True, отсечь бумаги с is_traded!=1 уже в запросе к ISS.
+    limit — если задан, переопределяет автоматический лимит.
     """
-    limit = 200 if as_list else 50
+    limit = limit if limit is not None else (200 if as_list else 50)
     q = query.strip()
     # Убираем слова-маркеры типа инструмента из запроса, если тип уже задан.
     # Решает проблему, когда модель добавляет "облигации" к запросу "РСХБ".

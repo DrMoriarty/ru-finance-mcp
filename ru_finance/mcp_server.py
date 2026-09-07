@@ -332,14 +332,14 @@ def moex_resolve(query: str) -> dict:
 
 
 @_tool()
-def moex_search(query: str, sec_type: str | None = None) -> list[dict]:
+def moex_search(query: str, sec_type: str | None = None, limit: int = 15) -> list[dict]:
     """Search MOEX securities by ticker/ISIN/name.
 
-    Args: query, sec_type — optional filter (ref://moex-sec-types).
+    Args: query, sec_type — optional filter (ref://moex-sec-types), limit — max results (default 15).
     Returns [{secid, shortname, isin, type, group, is_traded, engine, market, board}].
     Only actively traded (is_traded=1) are returned.
     """
-    return moex.resolve(query, sec_type=sec_type, as_list=True, traded_only=True)
+    return moex.resolve(query, sec_type=sec_type, as_list=True, traded_only=True, limit=limit)
 
 
 @_tool()
