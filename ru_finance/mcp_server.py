@@ -22,7 +22,7 @@ from mcp.server.streamable_http import EventCallback, EventId, EventMessage, Eve
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon
 
-from . import bonds, cbr, moex, portfolio, raexpert, rate, smartlab, vsezpif
+from . import bonds, cbr, fundamental, moex, portfolio, raexpert, rate, smartlab, vsezpif
 
 # ─────────────────────────── Roles ───────────────────────────
 # Каждый инструмент принадлежит одной роли. Generic-инструменты доступны всем
@@ -40,7 +40,10 @@ ROLES: dict[str, set[str]] = {
         "smartlab_dividends", "smartlab_dividend_history",
         "smartlab_stock_screener", "smartlab_company_financials",
         "smartlab_company_financials_multi",
-        "price_volatility", "liquidity_assessment",
+        "price_volatility", "liquidity_assessment", "technical_indicators",
+        "stock_f_score", "stock_z_score", "stock_peer_comparison",
+        "dividend_analysis", "stock_growth_analysis",
+        "bank_benchmark", "bank_peer_comparison", "company_fundamental_report",
     },
     "bond": {
         "moex_emitent_bonds", "moex_bond_coupons",
@@ -787,6 +790,159 @@ async def smartlab_company_financials_multi(
     )
 
 
+# ─────────────────── Fundamental analysis tools ───────────────────
+@mcp.tool()
+async def stock_f_score(ticker: str, ctx: Context,
+                        standard: str = "MSFO") -> dict:
+    """Piotroski F-Score (0–9) for a stock.
+
+    9 binary signals from financial statements:
+    1. ROA > 0
+    2. Operating cash flow > 0
+    3. ROA improving y/y
+    4. OCF > net income (accrual quality)
+    5. Debt/Assets decreasing
+    6. Assets growing (liquidity proxy)
+    7. No share dilution
+    8. EBITDA margin improving
+    9. Asset turnover (revenue/assets) improving
+
+    Score >= 7 = strong, 4-6 = moderate, <= 3 = weak.
+
+    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Returns: {ticker, name, f_score, max, signals, details, years}.
+    """
+    await ctx.report_progress(0, 2, f"Calculating F-Score for {ticker}")
+    return fundamental.f_score(ticker, standard=standard)
+
+
+@mcp.tool()
+async def stock_z_score(ticker: str, ctx: Context,
+                        standard: str = "MSFO") -> dict:
+    """Altman Z-Score (modified for emerging markets) for a stock.
+
+    Model Z' = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4 where:
+    X1 = working capital / assets (proxy from net_debt)
+    X2 = retained earnings / assets (proxy: book_value / assets)
+    X3 = EBIT / assets (operating_income / assets)
+    X4 = equity / liabilities (proxy: market_cap / debt)
+
+    Zones: Z' > 2.9 = safe, 1.23–2.9 = grey, < 1.23 = distress.
+    Note: uses available proxies; some components may be approximate.
+
+    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Returns: {ticker, name, z_score, zone, thresholds, components, missing, model}.
+    """
+    await ctx.report_progress(0, 2, f"Calculating Z-Score for {ticker}")
+    return fundamental.z_score(ticker, standard=standard)
+
+
+@mcp.tool()
+async def stock_peer_comparison(ticker: str, ctx: Context,
+                                limit: int = 20) -> dict:
+    """Compare stock multiples against top peers by market cap.
+
+    Ranks the ticker on P/E, P/S, P/B, EV/EBITDA, EBITDA margin,
+    Debt/EBITDA, dividend yield, payout ratio vs top-N stocks from
+    smart-lab screener. Shows median peer value.
+
+    Args: ticker — stock ticker; limit — number of peer companies (default 20).
+    Returns: {ticker, name, market_cap, peer_count, rankings: {metric: {value, rank, of, median}}}.
+    Rank 1 = best in group.
+    """
+    await ctx.report_progress(0, 2, f"Comparing {ticker} vs peers")
+    return fundamental.peer_comparison(ticker, limit=limit)
+
+
+@mcp.tool()
+async def dividend_analysis(ticker: str, ctx: Context) -> dict:
+    """Dividend analysis: CAGR, average yield, payment consistency.
+
+    Aggregate company's dividend history into yearly totals and compute:
+    - Dividend CAGR (compound annual growth rate)
+    - Average dividend yield
+    - Consecutive years without dividend cut
+    - Min/max yearly dividends
+    - Yearly breakdown
+
+    Args: ticker — stock ticker (e.g. 'SBER', 'LKOH').
+    Returns: {ticker, total_payments, years, yearly_dividends, yearly_yields_pct,
+              cagr, avg_yield_pct, consistent_years, min_dividend, max_dividend}.
+    """
+    await ctx.report_progress(0, 2, f"Analysing dividends for {ticker}")
+    return fundamental.dividend_analysis(ticker)
+
+
+@mcp.tool()
+async def stock_growth_analysis(ticker: str, ctx: Context,
+                                standard: str = "MSFO") -> dict:
+    """Multi-year growth analysis: revenue/EBITDA/net income CAGR, ROE/ROA/margin trends.
+
+    Uses annual financial statements to compute:
+    - Revenue CAGR over available years
+    - Net income CAGR
+    - EBITDA CAGR
+    - Historical series for ROE, ROA, EBITDA margin, net margin
+
+    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Returns: {ticker, name, standard, period_years, cagr: {revenue, net_income, ebitda},
+              series: {revenue, net_income, ebitda, roe, roa, ebitda_margin, net_margin}}.
+    """
+    await ctx.report_progress(0, 2, f"Analysing growth for {ticker}")
+    return fundamental.growth_analysis(ticker, standard=standard)
+
+
+@mcp.tool()
+async def bank_benchmark(tickers: list[str], ctx: Context,
+                         standard: str = "MSFO") -> list[dict]:
+    """Benchmark banks by key banking metrics.
+
+    Compares NIM, CIR, NPL, CAR, LDR, CoR, bank margin, ROA, ROE
+    across a list of bank tickers.
+
+    Args: tickers — list of bank tickers (e.g. ['SBER', 'VTBR', 'TCSG']).
+          standard — 'MSFO' or 'RSBU'.
+    Returns: [{ticker, name, net_intertest_margin, cost_to_income,
+               share_of_non_performing_loans, core_capital_adequacy_ratio,
+               loan_to_deposit_ratio, cost_of_risk_ratio, bank_margin, ...}].
+    """
+    n = len(tickers)
+    await ctx.report_progress(0, n, f"Benchmarking {n} banks")
+    return fundamental.bank_benchmark(tickers, standard=standard)
+
+
+@mcp.tool()
+async def bank_peer_comparison(ticker: str, ctx: Context) -> dict:
+    """Rank a bank against the BANKI sector on key banking metrics.
+
+    Fetches fundamentals for ~15 largest banks and ranks the ticker on:
+    NIM, CIR, NPL, CAR, LDR, CoR, bank margin.
+    Shows median value for context.
+
+    Args: ticker — bank ticker (e.g. 'SBER', 'VTBR').
+    Returns: {ticker, sector, peer_count, rankings: {metric: {value, rank, of, median, lower_is_better}}}.
+    """
+    await ctx.report_progress(0, 2, f"Ranking {ticker} vs bank sector")
+    return fundamental.bank_peer_comparison(ticker)
+
+
+@mcp.tool()
+async def company_fundamental_report(ticker: str, ctx: Context,
+                                     standard: str = "MSFO") -> dict:
+    """All-in-one company fundamental snapshot.
+
+    Combines in one call:
+    - Key financial metrics (P/E, P/S, P/B, EV/EBITDA, market cap, ROE, ROA, margins, debt)
+    - Dividend summary (CAGR, avg yield, consistency, last 3 years)
+    - Credit rating (Expert RA, if available)
+
+    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Returns: {ticker, metrics: {...}, dividends: {...}, credit_rating: [...], standard}.
+    """
+    await ctx.report_progress(0, 3, f"Building report for {ticker}")
+    return fundamental.company_report(ticker, standard=standard)
+
+
 # ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
 @mcp.tool()
 async def raexpert_rating(query: str, ctx: Context) -> list[dict]:
@@ -1241,6 +1397,27 @@ async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict
     return moex.liquidity(query, days)
 
 
+@mcp.tool()
+async def technical_indicators(query: str, ctx: Context, days: int = 90) -> dict:
+    """Full technical analysis suite for any MOEX instrument (stocks, ETF, bonds).
+
+    Computes from daily OHLCV candles:
+    Trend: RSI(14), Stochastic %K/%D(14,3,3), ADX(14)+DI, MACD(12,26,9),
+           ATR(14), Ichimoku(9,26,52), Parabolic SAR, EMA(12/26), SMA(50/200),
+           MA golden/death cross, Momentum(10), ROC(10).
+    Volatility: Bollinger Bands(20,2), ATR(14).
+    Volume: OBV + trend, CMF(20), VWAP.
+    Support/Resistance: Pivot Points(classic), Fibonacci retracements.
+
+    Args:
+        query — ticker or ISIN (e.g. 'SBER', 'SU26253RMFS2').
+        days — lookback period (default 90; 200+ recommended for Ichimoku/SMA200).
+    Returns: all indicators in a flat dict; keys present only when enough data.
+    """
+    await ctx.report_progress(0, 2, "Fetching candle data + computing indicators")
+    return moex.technical_indicators(query, days)
+
+
 # ─────────────────────────── ETF / БПИФ ───────────────────────────
 @mcp.tool()
 async def etf_fund_info(query: str, ctx: Context) -> dict:
@@ -1312,6 +1489,17 @@ async def etf_screener(
     ma_signal: str | None = None,
     adx_min: float | None = None,
     macd_signal: str | None = None,
+    stochastic_min: float | None = None,
+    stochastic_max: float | None = None,
+    cci_min: float | None = None,
+    cci_max: float | None = None,
+    williams_min: float | None = None,
+    williams_max: float | None = None,
+    ichimoku_signal: str | None = None,
+    psar_direction: str | None = None,
+    cmf_signal: str | None = None,
+    roc_min: float | None = None,
+    roc_max: float | None = None,
     premium_discount_max: float | None = None,
     tracking_error_max: float | None = None,
     include_indicators: bool = True,
@@ -1322,7 +1510,9 @@ async def etf_screener(
     """ETF/БПИФ screener: filter MOEX funds by multiple criteria.
 
     Loads all funds from TQIF/TQTF boards, enriches with metadata from
-    ETF_BENCHMARK_MAP, calculates technical indicators (RSI, MA, MACD, ADX).
+    ETF_BENCHMARK_MAP, calculates technical indicators:
+    RSI(14), Stochastic %K/%D, ADX, MACD, Bollinger Bands, ATR, OBV,
+    VWAP, CCI, Williams %R, Ichimoku, Parabolic SAR, Momentum/ROC, CMF.
 
     Args:
         category — asset class: 'equity_russia', 'equity_foreign',
@@ -1343,11 +1533,19 @@ async def etf_screener(
         ma_signal — 'golden_cross' (MA50>MA200), 'death_cross' (MA50<MA200)
         adx_min — minimum ADX (trend strength)
         macd_signal — 'bullish', 'bearish'
+        stochastic_min/stochastic_max — Stochastic %K(14,3,3)
+        cci_min/cci_max — CCI(20)
+        williams_min/williams_max — Williams %R(14) (−100 to 0)
+        ichimoku_signal — 'bullish', 'bearish', 'in_cloud'
+        psar_direction — 'long', 'short'
+        cmf_signal — 'buying_pressure', 'selling_pressure', 'neutral'
+        roc_min/roc_max — Rate of Change(10), %
         premium_discount_max — max premium/discount to NAV (%)
         tracking_error_max — max tracking error (%)
-        include_indicators — calculate RSI/MA/MACD/ADX (default True)
-        sort_by — sort field: 'performance', 'volatility', 'sharpe', 'volume',
-            'spread', 'premium', 'rsi', 'adx', 'beta'
+        include_indicators — calculate all TA indicators (default True)
+        sort_by — sort: 'performance', 'volatility', 'sharpe', 'volume',
+            'spread', 'premium', 'rsi', 'adx', 'beta', 'stochastic',
+            'cci', 'williams', 'roc', 'cmf', 'momentum'
         sort_desc — True = descending (default)
         limit — max results (1..200, default 15)
 
@@ -1359,9 +1557,16 @@ async def etf_screener(
       inav_price, premium_discount_pct,
       performance_1m/3m/6m/1y, ytd,
       volatility_ann, sharpe, max_drawdown, beta,
-      rsi_14, ma_50, ma_200, ma_signal,
+      rsi_14, stochastic_k, stochastic_d,
+      ma_50, ma_200, ma_signal,
       macd, macd_signal_line, macd_histogram, macd_signal,
-      adx, trend_strength,
+      bollinger_pct, bollinger_width,
+      adx, trend_strength, atr_14,
+      cci_20, williams_r,
+      ichimoku_signal,
+      psar, psar_direction,
+      momentum_10, roc_10,
+      cmf_20, cmf_signal,
       tracking_error_ann}]}.
     """
     await ctx.report_progress(0, 4, "Loading all ETF/БПИФ from MOEX boards")
@@ -1389,6 +1594,17 @@ async def etf_screener(
         ma_signal=ma_signal,
         adx_min=adx_min,
         macd_signal=macd_signal,
+        stochastic_min=stochastic_min,
+        stochastic_max=stochastic_max,
+        cci_min=cci_min,
+        cci_max=cci_max,
+        williams_min=williams_min,
+        williams_max=williams_max,
+        ichimoku_signal=ichimoku_signal,
+        psar_direction=psar_direction,
+        cmf_signal=cmf_signal,
+        roc_min=roc_min,
+        roc_max=roc_max,
         premium_discount_max=premium_discount_max,
         tracking_error_max=tracking_error_max,
         include_indicators=include_indicators,

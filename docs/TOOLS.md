@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-66 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+76 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -121,6 +121,18 @@
 - Типы: Корпоративные, ОФЗ, Муниципальные и т.д.
 - **Пример:** `moex_bond_market_aggregates(frm="2026-09-01")`
 
+### 🟢 `moex_emitent_bonds(query, min_duration=None, max_duration=None)`
+Все облигации эмитента (по названию/тикеру).
+- **Принимает:** `query` — имя/тикер эмитента (`"Газпром"`, `"Сбербанк"`, `"ГТЛК"`); `min_duration`/`max_duration` — фильтр по дюрации (лет).
+- **Возвращает:** `{emitent_id, count, bonds: [{secid, isin, shortname, price, ytm, duration, coupon, maturity, ...}]}`. Резолвит эмитента по `emitent_id`, затем ищет все бумаги с тем же `emitent_id`.
+- **Пример:** `moex_emitent_bonds("Газпром")`, `moex_emitent_bonds("ГТЛК", max_duration=5)`
+
+### 🟢 `moex_bond_coupons(query)`
+Расписание купонов (прошлых + будущих) из НРД/MOEX.
+- **Принимает:** `query` — ISIN или номер ОФЗ.
+- **Возвращает:** `[{coupondate, value, valueprc, facevalue, faceunit, is_past, recorddate, startdate}]`. `is_past=True` → уже выплачен. Пустой список для ОФЗ (данные НРД не доступны через ISS).
+- **Пример:** `moex_bond_coupons("RU000A106FP4")` → `[{coupondate:"2026-04-15", value:36.87, valueprc:7.65, is_past:true, ...}, ...]`
+
 ### 🟢 `moex_zcyc_history(frm, till)`
 История параметров КБД (Кривая Бескупонной Доходности).
 - **Принимает:** `frm`/`till` (`"YYYY-MM-DD"`).
@@ -181,6 +193,12 @@
 - **Возвращает:** `{fee_forts, fee_options, fee_all, updated_at}` — совокупные комиссионные сборы рынка.
 - **Использование:** грубый proxy активности рынка в динамике (выше сборы → больше торгов).
 
+### 🧮 `moex_futures_basis(asset_code)`
+Contango/backwardation — annualised carry от basis фьючерса.
+- **Принимает:** `asset_code` — код базисного (`"Si"`, `"GAZP"`, `"SiM5"`, ...).
+- **Возвращает:** `{asset, asset_code, futures_secid, futures_settle, spot_price, spot_source, basis_pct, annualized_return_pct, days_to_expiry, expiry, direction}`. `direction` = `contango` (`>0`, futures дороже spot) / `backwardation` (`<0`, futures дешевле spot). Спот-источник: FX → курс ЦБ, акции → MOEX quote, индекс → MOEX index, товар → CBR/MOEX.
+- **Примеры:** `moex_futures_basis("Si")`, `moex_futures_basis("GAZP")`, `moex_futures_basis("SiM5")`.
+
 ### 🟢 `moex_options_assets()`
 Базисные активы опционов FORTS с рыночными данными.
 - **Принимает:** ничего.
@@ -234,6 +252,74 @@
 - **Принимает:** `ticker` — тикер («SBER», «LKOH»).
 - **Возвращает:** список `{ticker, date_t1, cutoff_date, period, dividend_rub, price, yield_pct}`. `dividend_rub` — ₽ за акцию; `yield_pct` — див. доходность %.
 - **Пример:** `smartlab_dividend_history("SBER")` → 18 строк, последняя: `{ticker:"SBER", period:"2025 год", dividend_rub:37.64, yield_pct:13.6}`
+
+### 🟢 `smartlab_company_financials(ticker, period="annual", standard="rsbu")`
+Детальная финансовая отчётность компании со smart-lab.ru (мульти-годовая).
+- **Принимает:** `ticker` — тикер; `period` — `"annual"` (по умолч.) или `"quarter"`; `standard` — `"rsbu"` (РСБУ, по умолч.) или `"ifrs"` (МСФО).
+- **Возвращает:** `{ticker, name, years, data: {field: {label, values: {"2022": val, "2023": val, ..., "LTM": val}}}}`.
+- **Пример:** `smartlab_company_financials("SBER")` → `{ticker:"SBER", years:["2020","2021",...,"LTM"], data:{revenue:{label:"Выручка", values:{...}}, ...}}`
+
+### 🟢 `smartlab_company_financials_multi(tickers, period="annual", standard="rsbu")`
+Детальная финансовая отчётность несколькиих компаний (batch).
+- **Принимает:** `tickers` — список тикеров (`["SBER","LKOH","GAZP"]`); `period`/`standard` — см. `smartlab_company_financials`.
+- **Возвращает:** `{ticker: {name, years, data: ...}, ...}` — аналог `smartlab_company_financials` для каждого тикера; ошибки по отдельным тикерам не останавливают обработку остальных.
+- **Пример:** `smartlab_company_financials_multi(["SBER","LKOH"])` → `{SBER:{...}, LKOH:{...}}`
+
+### 🧮 `smartlab_stock_screener(...)`
+Фундаментальный скринер акций MOEX (LTM-множители от smart-lab.ru, кэш 4 ч).
+- **Принимает:** `market_cap_min`/`market_cap_max` — капитализация (₽); `pe_min`/`pe_max` — P/E; `ps_min`/`ps_max` — P/S; `pb_min`/`pb_max` — P/B; `ev_ebitda_min`/`ev_ebitda_max` — EV/EBITDA; `roe_min`/`roe_max` — ROE (%); `roa_min`/`roa_max` — ROA (%); `ebitda_margin_min`/`ebitda_margin_max` — рентаб. EBITDA (%); `div_yield_min`/`div_yield_max` — див. доходность (%); `sort_field` / `sort_desc`; `limit` (макс. 200, по умолч. 30).
+- **Возвращает:** `{count, limit, stocks: [{ticker, name, market_cap, pe, ps, pb, ev_ebitda, dividend_yield, roe, roa, ebitda_margin, ebitda, debt_ebitda, ...}]}`
+- **Пример:** `smartlab_stock_screener(market_cap_min=100_000_000_000, div_yield_min=5, sort_field="dividend_yield")`
+
+### 🧮 `stock_f_score(ticker)`
+Piotroski F-Score (0–9) — 9 бинарных сигналов из финансовой отчётности.
+- **Принимает:** `ticker` — тикер.
+- **Возвращает:** `{ticker, f_score, signals: {roa_positive, cfo_positive, roa_improving, cfo_gt_ni, debt_decreasing, current_ratio_improving, no_dilution, gross_margin_improving, asset_turnover_improving}, annual_data: {year, roa, cfo_to_assets, ...}}`.
+- F ≥ 7 — сильные фундаменталы; F ≤ 3 — слабые.
+- **Пример:** `stock_f_score("SBER")` → `{"ticker":"SBER","f_score":7, ...}`
+
+### 🧮 `stock_z_score(ticker)`
+Altman Z-Score (модифицированный для emerging markets) — банкротный риск.
+- **Принимает:** `ticker` — тикер.
+- **Возвращает:** `{ticker, z_score, interpretation, components: {x1, x2, x3, x4}, data: {total_assets, working_capital, retained_earnings, ebit, market_cap, total_liabilities, revenue}}`.
+- Z > 2.9 → безопасная зона; 1.23–2.9 → серая зона; < 1.23 → зона риска.
+- **Пример:** `stock_z_score("SBER")` → `{"z_score":3.29,"interpretation":"safe_zone",...}`
+
+### 🧮 `stock_peer_comparison(ticker, top_n=15)`
+Сравнение мультипликаторов акции с топ-N peers по капитализации.
+- **Принимает:** `ticker`; `top_n` — сколько peers (по умолч. 15).
+- **Возвращает:** `{ticker, rank: {pe, ps, pb, ev_ebitda, ebitda_margin, debt_ebitda, div_yield, payout}, peer_median: {pe, ps, ...}, peer_count, peers_tickers}`.
+- **Пример:** `stock_peer_comparison("SBER")` → `{rank:{pe:3,...}, peer_median:{pe:8.5,...}}`
+
+### 🧮 `dividend_analysis(ticker)`
+Агрегированный дивидендный анализ: CAGR, средняя доходность, стабильность выплат.
+- **Принимает:** `ticker` — тикер.
+- **Возвращает:** `{ticker, total_years, dividend_cagr_pct, avg_yield_pct, payments_with_dividends, years_with_payments, payments_count, last_3_years: [{year, total_dividends, avg_yield}], consistency_pct}`.
+- **Пример:** `dividend_analysis("SBER")` → `{"dividend_cagr_pct":19.5,"avg_yield_pct":7.8,"consistency_pct":87.5,...}`
+
+### 🧮 `stock_growth_analysis(ticker)`
+Рост выручки/EBITDA/чистой прибыли, тренды ROE/ROA/маржинальности (мульти-год).
+- **Принимает:** `ticker` — тикер.
+- **Возвращает:** `{ticker, years, data: {year, revenue, ebitda, net_income, roe, roa, ebitda_margin, net_margin, gross_margin}, analysis: {revenue_cagr, net_income_cagr, latest_roe, latest_roa, latest_ebitda_margin}}`.
+- **Пример:** `stock_growth_analysis("SBER")` → `{"analysis":{"revenue_cagr":14.2,"latest_roe":25.3,...}}`
+
+### 🧮 `bank_benchmark(tickers, short_names=None)`
+Бенчмарк банков по ключевым банковским метрикам.
+- **Принимает:** `tickers` — список тикеров банков (`["SBER","VTBR","TCSG"]`); `short_names` — опционально, отображаемые имена.
+- **Возвращает:** `{banks: [{ticker, name, nim, cir, npl, car, ldr, cor, bank_margin, roa, roe}], medians: {nim, cir, ...}}`.
+- **Пример:** `bank_benchmark(["SBER","VTBR"])` → `{banks:[{ticker:"SBER", nim:5.9, roe:25.3, ...},...], medians:{nim:5.5,...}}`
+
+### 🧮 `bank_peer_comparison(ticker)`
+Ранжирование банка по банковским метрикам относительно всего сектора (~15 крупнейших).
+- **Принимает:** `ticker` — тикер банка.
+- **Возвращает:** `{ticker, rank: {nim, cir, npl, car, ldr, cor, bank_margin}, median: {nim, cir, ...}, bank_count, note}`.
+- **Пример:** `bank_peer_comparison("SBER")` → `{rank:{nim:3,...}, bank_count:15,...}`
+
+### 🧮 `company_fundamental_report(ticker)`
+Всё в одном: мультипликаторы + дивиденды + рост + Z-Score + F-Score + peer-сравнение.
+- **Принимает:** `ticker` — тикер.
+- **Возвращает:** `{ticker, name, market_cap, mpe, ps, pb, ev_ebitda, roe, roa, margins, debt, dividend: {cagr, avg_yield, consistency, last_years}, growth: {revenue_cagr, ...}, z_score, f_score, peer_rank}`.
+- **Пример:** `company_fundamental_report("SBER")`
 
 ---
 
@@ -400,6 +486,14 @@ MIACR — фактические средневзвешенные ставки �
 - **Использование:** предварительный отбор облигаций по портфелю; для глубокого
   анализа отобранных бумаг → `bond_report`.
 
+### 🧮 `bond_synthetic_yield(query, horizon_years, reinvest_rate_ytm_pct=None)`
+Синтетическая доходность с реинвестированием купонов на горизонте инвестирования.
+- **Принимает:** `query` — тикер/ISIN; `horizon_years` — горизонт (лет); `reinvest_rate_ytm_pct` — ставка реинвестирования (% годовых, по умолчанию = текущая YTM бумаги).
+- **Возвращает:** `{secid, isin, horizon_years, reinvest_rate, purchase_price_dirty, coupons_received, coupons_reinvested_at, future_value, synthetic_yield_pct, ...}`.
+  - `synthetic_yield_pct` — IRR полного денежного потока: покупка по грязной цене, купоны реинвестированы, продажа по ожидаемой YTM на горизонте (или погашение по номиналу, если горизонт ≥ погашения).
+- **Пример:** `bond_synthetic_yield("SU26253RMFS2", 3)` → `{"synthetic_yield_pct":16.14,...}`
+- **Использование:** сравнение облигаций на едином горизонте; sensitivity на реинвест.
+
 ### 🧮 `price_volatility(query, days=90, rf_annual=16.0)`
 Волатильность, Sharpe ratio, max drawdown по дневным свечам.
 - **Принимает:** `query` (тикер), `days` (90 по умолчанию), `rf_annual` (безрисковая ставка, % годовых).
@@ -418,6 +512,19 @@ MIACR — фактические средневзвешенные ставки �
   - `grade` — `A` (отличная) ≥8, `B` (хорошая) ≥6, `C` (умеренная) ≥4, `D` (низкая) ≥2, `E` (<2).
 - **Пример:** `liquidity_assessment("SBER")` → `{"secid":"SBER","avg_daily_turnover_rub":9038700000,"amihud_bps_per_mln":0.02,"spread":0.053,"composite_score":9.7,"grade":"A",...}`
 - **Использование:** сравнение ликвидности бумаг; при large-cap score ≥8 (grade A) стакан плотный; score <4 (grade D-E) — сложность входа/выхода при крупных позициях.
+
+### 🧮 `technical_indicators(query, days=90)`
+Полный набор технических индикаторов из дневных свечей (OHLCV). Для MA200/Ichimoku рекомендуется `days ≥ 200`.
+- **Принимает:** `query` — тикер/ISIN; `days` — период (по умолч. 90).
+- **Возвращает:** `{secid, period_days, trading_days, ...}` с полями (присутствуют при достаточном количестве данных):
+  - **Тренд:** `rsi_14`, `stochastic_k`/`stochastic_d` (14,3,3), `adx` + `plus_di`/`minus_di` + `trend_strength` (weak/moderate/strong/very_strong), `macd` + `macd_signal_line` + `macd_histogram` + `macd_signal` (bullish/bearish/neutral), `atr_14` + `atr_14_pct`, `ichimoku_tenkan`/`ichimoku_kijun`/`ichimoku_senkou_a`/`ichimoku_senkou_b`/`ichimoku_chikou` + `ichimoku_signal` (bullish/bearish/in_cloud), `psar` + `psar_direction` (long/short), `ema_12`/`ema_26`, `ma_50`/`ma_200` + `ma_signal` (golden_cross/death_cross);
+  - **Волатильность:** `bollinger_upper`/`bollinger_middle`/`bollinger_lower` + `bollinger_width (%Bandwidth)` + `bollinger_pct (%B)`;
+  - **Объём:** `obv` + `obv_trend` (rising/falling), `cmf_20` + `cmf_signal` (buying_pressure/selling_pressure/neutral), `vwap`;
+  - **Осцилляторы:** `cci_20`, `williams_r` (−100..0);
+  - **Моментум:** `momentum_10`, `roc_10 (%)`;
+  - **Уровни:** `pivot`/`pivot_s1..s3`/`pivot_r1..r3`, `fib_236/382/500/618/786` + `fib_high`/`fib_low`.
+- **Пример:** `technical_indicators("SBER")` → `{"rsi_14":52.3,"stochastic_k":72.1,"macd_signal":"bullish","adx":18.5,"trend_strength":"weak","adx_plus_di":25.1,...}`
+- **Использование:** комплексная TA-оценка любого инструмента (акция, ETF, облигация) — один вызов вместо ручных расчётов.
 
 ---
 
@@ -459,7 +566,7 @@ MIACR — фактические средневзвешенные ставки �
 ### 🧮 `etf_screener(...)` 
 Скринер БПИФ/ETF на MOEX с фильтрацией по множеству параметров и расчётом технических индикаторов.
 
-Загружает все фонды с бордов TQIF/TQTF, обогащает метаданными из `ETF_BENCHMARK_MAP`, рассчитывает RSI, MA, MACD, ADX, Beta.
+Загружает все фонды с бордов TQIF/TQTF, обогащает метаданными из `ETF_BENCHMARK_MAP`, рассчитывает RSI, Stochastic, MA, MACD, ADX, Bollinger, ATR, VWAP, CCI, Williams %R, Ichimoku, Parabolic SAR, Momentum/ROC, CMF, Beta.
 
 - **Принимает (все опционально):**
   - `category` — класс активов: `equity_russia`, `equity_foreign`, `equity_sector`, `equity_dividend`, `bond_gov`, `bond_corp`, `money_market`, `commodity`, `fx`, `mixed`
@@ -475,22 +582,30 @@ MIACR — фактические средневзвешенные ставки �
   - `performance_min/performance_max` — доходность (%)
   - `performance_period` — период: `1m`, `3m`, `6m`, `1y`, `ytd`
   - `rsi_min/rsi_max` — RSI(14)
-  - `ma_signal` — `golden_cross` (MA50>MA200), `death_cross` (MA50<MA200)
+  - `ma_signal` — `golden_cross`, `death_cross`
   - `adx_min` — минимальный ADX (сила тренда)
   - `macd_signal` — `bullish`, `bearish`
+  - `stochastic_min/stochastic_max` — Stochastic %K(14,3,3)
+  - `cci_min/cci_max` — CCI(20)
+  - `williams_min/williams_max` — Williams %R(14) (−100..0)
+  - `ichimoku_signal` — `bullish`, `bearish`, `in_cloud`
+  - `psar_direction` — `long`, `short`
+  - `cmf_signal` — `buying_pressure`, `selling_pressure`, `neutral`
+  - `roc_min/roc_max` — Rate of Change(10), %
   - `premium_discount_max` — макс. премия/дисконт к NAV (%)
   - `tracking_error_max` — макс. трекинг-ошибка (%)
-  - `include_indicators` — рассчитывать RSI/MA/MACD/ADX (default `true`)
-  - `sort_by` — сортировка: `performance`, `volatility`, `sharpe`, `volume`, `spread`, `premium`, `rsi`, `adx`, `beta`
+  - `include_indicators` — рассчитывать TA (default `true`)
+  - `sort_by` — сортировка: `performance`, `volatility`, `sharpe`, `volume`, `spread`, `premium`, `rsi`, `adx`, `beta`, `stochastic`, `cci`, `williams`, `roc`, `cmf`, `momentum`
   - `sort_desc` — `true` = по убыванию (default)
   - `limit` — максимум результатов (1..200, default 15)
 
 - **Возвращает:** `{count_shown, count_total_matching, count_all_funds, funds[]}`.
-  Каждый фонд: `{secid, shortname, isin, emitent, category, category_ru, benchmark, benchmark_name, currency, price, change_pct, bid, ask, spread_pct, value_today, vol_today, inav_price, premium_discount_pct, performance_1m/3m/6m/1y, ytd, volatility_ann, sharpe, max_drawdown, beta, rsi_14, ma_50, ma_200, ma_signal, macd, macd_signal_line, macd_histogram, macd_signal, adx, trend_strength}`.
+  Каждый фонд: `{secid, shortname, isin, emitent, category, category_ru, benchmark, benchmark_name, currency, price, change_pct, bid, ask, spread_pct, value_today, vol_today, inav_price, premium_discount_pct, performance_1m/3m/6m/1y, ytd, volatility_ann, sharpe, max_drawdown, beta, rsi_14, stochastic_k, stochastic_d, ma_50, ma_200, ma_signal, macd, macd_signal_line, macd_histogram, macd_signal, bollinger_pct, bollinger_width, adx, trend_strength, atr_14, atr_14_pct, cci_20, williams_r, ichimoku_signal, psar, psar_direction, momentum_10, roc_10, cmf_20, cmf_signal}`.
 
 - **Примеры:**
   - `etf_screener(category="equity_russia")` → все российские акционные фонды
   - `etf_screener(category="commodity", sort_by="performance")` → сырьевые, отсортированные по доходности
+  - `etf_screener(ma_signal="golden_cross", cci_min=100, cmf_signal="buying_pressure")` → фонды с бычьими TA-сигналами
   - `etf_screener(sharpe_min=1.0, volatility_max=20)` → фонды с Sharpe > 1 и волатильностью < 20%
   - `etf_screener(ma_signal="golden_cross", adx_min=25)` → сильный восходящий тренд
   - `etf_screener(emitent="Т-Капитал")` → все фонды Т-Капитала

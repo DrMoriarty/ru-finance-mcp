@@ -2051,25 +2051,36 @@ def _fetch_board_etf(board: str, retries: int = 4) -> list[dict]:
 
 
 def technical_indicators(query: str, days: int = 90) -> dict:
-    """Рассчитать технические индикаторы из дневных свечей.
+    """Рассчитать технические индикаторы из дневных свечей (OHLCV).
 
     Args:
         query — тикер или ISIN.
-        days — период для расчёта (default 90). Для MA200 нужно 200+ дней.
+        days — период для расчёта (default 90). Для MA200/Ichimoku нужно 200+ дней.
 
     Returns:
         {secid, period_days, trading_days,
-         rsi_14, ma_50, ma_200, ma_signal,
+         rsi_14, stochastic_k, stochastic_d,
+         ma_50, ma_200, ma_signal, ema_12, ema_26,
          macd, macd_signal_line, macd_histogram, macd_signal,
-         adx, trend_strength,
-         beta (если передан benchmark_closes), ...}
+         bollinger_upper, bollinger_middle, bollinger_lower, bollinger_width, bollinger_pct,
+         adx, plus_di, minus_di, trend_strength,
+         atr_14,
+         obv, obv_trend,
+         vwap,
+         cci_20,
+         williams_r,
+         ichimoku_tenkan, ichimoku_kijun, ichimoku_senkou_a, ichimoku_senkou_b, ichimoku_chikou, ichimoku_signal,
+         psar, psar_direction,
+         pivot, pivot_s1, pivot_s2, pivot_s3, pivot_r1, pivot_r2, pivot_r3,
+         fib_236, fib_382, fib_500, fib_618, fib_786, fib_high, fib_low,
+         momentum_10, roc_10,
+         cmf_20, cmf_signal}
     """
-    import math
     from datetime import date as _date, timedelta
 
     r = resolve(query)
     till = _date.today()
-    frm = till - timedelta(days=days + 30)  # запас для расчёта MA
+    frm = till - timedelta(days=days + 30)
 
     raw_candles = exec_template(T_CANDLES, {
         "engine": r["engine"], "market": r["market"],
@@ -2081,13 +2092,42 @@ def technical_indicators(query: str, days: int = 90) -> dict:
     if len(closes) < 14:
         return {"error": "недостаточно данных", "secid": r["secid"], "trading_days": len(closes)}
 
+    opens = [row["open"] for row in rows if row.get("open")]
+    highs = [row["high"] for row in rows if row.get("high")]
+    lows = [row["low"] for row in rows if row.get("low")]
+    volumes = [row["volume"] for row in rows if row.get("volume")]
+
     result: dict = {
         "secid": r["secid"],
         "period_days": days,
         "trading_days": len(closes),
     }
 
-    # ── RSI(14) ──
+    # ══════════════ Вспомогательные функции ══════════════
+
+    def _sma(data: list[float], period: int) -> float | None:
+        if len(data) < period:
+            return None
+        return round(sum(data[-period:]) / period, 6)
+
+    def _ema_series(data: list[float], period: int) -> list[float]:
+        if len(data) < period:
+            return []
+        multiplier = 2 / (period + 1)
+        ema = [sum(data[:period]) / period]
+        for i in range(period, len(data)):
+            ema.append(data[i] * multiplier + ema[-1] * (1 - multiplier))
+        return ema
+
+    def _wilder_smooth(data: list[float], period: int) -> list[float]:
+        if len(data) < period:
+            return []
+        result_ws = [sum(data[:period]) / period]
+        for i in range(period, len(data)):
+            result_ws.append((result_ws[-1] * (period - 1) + data[i]) / period)
+        return result_ws
+
+    # ══════════════ RSI(14) — Wilder's smoothed ══════════════
     rsi_period = 14
     if len(closes) >= rsi_period + 1:
         gains = []
@@ -2097,11 +2137,9 @@ def technical_indicators(query: str, days: int = 90) -> dict:
             gains.append(max(0, delta))
             losses.append(max(0, -delta))
 
-        # Первый avg
         avg_gain = sum(gains[:rsi_period]) / rsi_period
         avg_loss = sum(losses[:rsi_period]) / rsi_period
 
-        # Smoothed (Wilder's method)
         for i in range(rsi_period, len(gains)):
             avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
             avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
@@ -2112,14 +2150,40 @@ def technical_indicators(query: str, days: int = 90) -> dict:
             rs = avg_gain / avg_loss
             result["rsi_14"] = round(100 - 100 / (1 + rs), 2)
 
-    # ── Simple Moving Averages ──
-    def _sma(data: list[float], period: int) -> float | None:
-        if len(data) < period:
-            return None
-        return round(sum(data[-period:]) / period, 4)
+    # ══════════════ Stochastic %K/%D(14, 3, 3) ══════════════
+    stoch_period = 14
+    if len(closes) >= stoch_period and len(highs) >= stoch_period and len(lows) >= stoch_period:
+        stoch_k_values = []
+        for i in range(stoch_period - 1, len(closes)):
+            window_h = highs[i - stoch_period + 1:i + 1]
+            window_l = lows[i - stoch_period + 1:i + 1]
+            hh = max(window_h)
+            ll = min(window_l)
+            if hh == ll:
+                stoch_k_values.append(50.0)
+            else:
+                stoch_k_values.append((closes[i] - ll) / (hh - ll) * 100)
 
+        if len(stoch_k_values) >= 3:
+            stoch_k = round(sum(stoch_k_values[-3:]) / 3, 2)
+            result["stochastic_k"] = stoch_k
+            if len(stoch_k_values) >= 5:
+                # %D = SMA(3) of %K series
+                d_vals = []
+                for i in range(2, len(stoch_k_values)):
+                    d_vals.append(sum(stoch_k_values[i - 2:i + 1]) / 3)
+                result["stochastic_d"] = round(d_vals[-1], 2)
+
+    # ══════════════ SMA / EMA ══════════════
     result["ma_50"] = _sma(closes, 50)
     result["ma_200"] = _sma(closes, 200)
+
+    ema12_series = _ema_series(closes, 12)
+    ema26_series = _ema_series(closes, 26)
+    if ema12_series:
+        result["ema_12"] = round(ema12_series[-1], 4)
+    if ema26_series:
+        result["ema_26"] = round(ema26_series[-1], 4)
 
     # MA signal (Golden/Death Cross)
     ma50 = result["ma_50"]
@@ -2129,27 +2193,13 @@ def technical_indicators(query: str, days: int = 90) -> dict:
     else:
         result["ma_signal"] = "insufficient_data"
 
-    # ── MACD(12, 26, 9) ──
-    def _ema(data: list[float], period: int) -> list[float]:
-        """Exponential Moving Average — returns full series."""
-        if len(data) < period:
-            return []
-        multiplier = 2 / (period + 1)
-        ema_series = [sum(data[:period]) / period]
-        for i in range(period, len(data)):
-            ema_series.append(data[i] * multiplier + ema_series[-1] * (1 - multiplier))
-        return ema_series
-
-    if len(closes) >= 26:
-        ema12 = _ema(closes, 12)
-        ema26 = _ema(closes, 26)
-        # Выравниваем длины (ema12 начинается раньше)
-        offset = len(ema12) - len(ema26)
-        macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
+    # ══════════════ MACD(12, 26, 9) ══════════════
+    if len(ema12_series) >= 26 and len(ema26_series) >= 9:
+        offset = len(ema12_series) - len(ema26_series)
+        macd_line = [ema12_series[offset + i] - ema26_series[i] for i in range(len(ema26_series))]
 
         if len(macd_line) >= 9:
-            signal_line = _ema(macd_line, 9)
-            macd_offset = len(macd_line) - len(signal_line)
+            signal_line = _ema_series(macd_line, 9)
             histogram = macd_line[-1] - signal_line[-1]
 
             result["macd"] = round(macd_line[-1], 4)
@@ -2163,20 +2213,30 @@ def technical_indicators(query: str, days: int = 90) -> dict:
             else:
                 result["macd_signal"] = "neutral"
 
-    # ── ADX(14) ──
-    # Нужны High, Low, Close
-    highs = [row["high"] for row in rows if row.get("high")]
-    lows = [row["low"] for row in rows if row.get("low")]
-    adx_closes = [row["close"] for row in rows if row.get("close")]
+    # ══════════════ Bollinger Bands(20, 2) ══════════════
+    bb_period = 20
+    if len(closes) >= bb_period:
+        bb_sma = sum(closes[-bb_period:]) / bb_period
+        variance = sum((c - bb_sma) ** 2 for c in closes[-bb_period:]) / bb_period
+        bb_std = variance ** 0.5
 
+        result["bollinger_upper"] = round(bb_sma + 2 * bb_std, 4)
+        result["bollinger_middle"] = round(bb_sma, 4)
+        result["bollinger_lower"] = round(bb_sma - 2 * bb_std, 4)
+        result["bollinger_width"] = round(4 * bb_std / bb_sma * 100, 2) if bb_sma else None
+        last_close = closes[-1]
+        band_range = (bb_sma + 2 * bb_std) - (bb_sma - 2 * bb_std)
+        if band_range > 0:
+            result["bollinger_pct"] = round((last_close - (bb_sma - 2 * bb_std)) / band_range, 4)
+
+    # ══════════════ ADX(14) + DI ══════════════
     adx_period = 14
     if len(highs) >= adx_period + 1 and len(lows) >= adx_period + 1:
-        # True Range
         tr_list = []
         plus_dm = []
         minus_dm = []
         for i in range(1, len(highs)):
-            h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], adx_closes[i-1]
+            h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
             tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
             tr_list.append(tr)
 
@@ -2186,7 +2246,6 @@ def technical_indicators(query: str, days: int = 90) -> dict:
             minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
 
         if len(tr_list) >= adx_period:
-            # Smoothed TR, +DM, -DM (Wilder's)
             atr = sum(tr_list[:adx_period])
             apdm = sum(plus_dm[:adx_period])
             amdm = sum(minus_dm[:adx_period])
@@ -2210,6 +2269,10 @@ def technical_indicators(query: str, days: int = 90) -> dict:
                     adx_val = (adx_val * (adx_period - 1) + dx_list[i]) / adx_period
 
                 result["adx"] = round(adx_val, 2)
+                # Последние DI для информативности
+                if atr > 0:
+                    result["plus_di"] = round(100 * apdm / atr, 2)
+                    result["minus_di"] = round(100 * amdm / atr, 2)
                 if adx_val >= 40:
                     result["trend_strength"] = "very_strong"
                 elif adx_val >= 25:
@@ -2218,6 +2281,234 @@ def technical_indicators(query: str, days: int = 90) -> dict:
                     result["trend_strength"] = "moderate"
                 else:
                     result["trend_strength"] = "weak"
+
+    # ══════════════ ATR(14) — Average True Range ══════════════
+    atr_period = 14
+    if len(highs) >= atr_period + 1:
+        tr_list_atr = []
+        for i in range(1, len(highs)):
+            h, l, prev_c = highs[i], lows[i], closes[i-1]
+            tr_list_atr.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+
+        atr_smoothed = _wilder_smooth(tr_list_atr, atr_period)
+        if atr_smoothed:
+            result["atr_14"] = round(atr_smoothed[-1], 4)
+            result["atr_14_pct"] = round(atr_smoothed[-1] / closes[-1] * 100, 2) if closes[-1] else None
+
+    # ══════════════ OBV — On Balance Volume ══════════════
+    if len(closes) >= 2 and len(volumes) >= len(closes):
+        valid_volumes = volumes[:len(closes)]
+        obv = 0
+        obv_series = [0]
+        for i in range(1, len(closes)):
+            if closes[i] > closes[i - 1]:
+                obv += valid_volumes[i]
+            elif closes[i] < closes[i - 1]:
+                obv -= valid_volumes[i]
+            obv_series.append(obv)
+
+        result["obv"] = obv
+        # OBV trend: comparing last 10 vs previous 10
+        if len(obv_series) >= 20:
+            recent_obv = sum(obv_series[-10:]) / 10
+            prev_obv = sum(obv_series[-20:-10]) / 10
+            result["obv_trend"] = "rising" if recent_obv > prev_obv else "falling"
+
+    # ══════════════ VWAP — Volume Weighted Average Price ══════════════
+    if len(closes) >= 1 and len(highs) >= 1 and len(lows) >= 1 and len(volumes) >= len(closes):
+        cum_tp_vol = 0.0
+        cum_vol = 0.0
+        # Используем все свечи периода
+        for i in range(min(len(closes), len(highs), len(lows))):
+            tp = (highs[i] + lows[i] + closes[i]) / 3
+            v = volumes[i]
+            cum_tp_vol += tp * v
+            cum_vol += v
+        if cum_vol > 0:
+            result["vwap"] = round(cum_tp_vol / cum_vol, 4)
+
+    # ══════════════ CCI(20) — Commodity Channel Index ══════════════
+    cci_period = 20
+    if len(closes) >= cci_period and len(highs) >= cci_period and len(lows) >= cci_period:
+        typical_prices = [(highs[i] + lows[i] + closes[i]) / 3
+                          for i in range(len(closes))]
+        tp_sma = sum(typical_prices[-cci_period:]) / cci_period
+        mean_dev = sum(abs(tp - tp_sma) for tp in typical_prices[-cci_period:]) / cci_period
+        if mean_dev > 0:
+            result["cci_20"] = round((typical_prices[-1] - tp_sma) / (0.015 * mean_dev), 2)
+
+    # ══════════════ Williams %R(14) ══════════════
+    wr_period = 14
+    if len(closes) >= wr_period and len(highs) >= wr_period and len(lows) >= wr_period:
+        hh_wr = max(highs[-wr_period:])
+        ll_wr = min(lows[-wr_period:])
+        if hh_wr != ll_wr:
+            result["williams_r"] = round((hh_wr - closes[-1]) / (hh_wr - ll_wr) * -100, 2)
+
+    # ══════════════ Ichimoku Cloud (9, 26, 52) ══════════════
+    tenkan_p, kijun_p, senkou_b_p = 9, 26, 52
+    if len(highs) >= senkou_b_p:
+        def _mid_point(data: list[float], period: int) -> float | None:
+            if len(data) < period:
+                return None
+            window = data[-period:]
+            return (max(window) + min(window)) / 2
+
+        tenkan = _mid_point(highs, tenkan_p) and _mid_point(lows, tenkan_p)
+        kijun = _mid_point(highs, kijun_p) and _mid_point(lows, kijun_p)
+
+        if len(highs) >= tenkan_p and len(lows) >= tenkan_p:
+            h_t = max(highs[-tenkan_p:])
+            l_t = min(lows[-tenkan_p:])
+            result["ichimoku_tenkan"] = round((h_t + l_t) / 2, 4)
+
+        if len(highs) >= kijun_p and len(lows) >= kijun_p:
+            h_k = max(highs[-kijun_p:])
+            l_k = min(lows[-kijun_p:])
+            result["ichimoku_kijun"] = round((h_k + l_k) / 2, 4)
+
+        tk = result.get("ichimoku_tenkan")
+        kj = result.get("ichimoku_kijun")
+        if tk is not None and kj is not None:
+            result["ichimoku_senkou_a"] = round((tk + kj) / 2, 4)
+
+        if len(highs) >= senkou_b_p and len(lows) >= senkou_b_p:
+            h_sb = max(highs[-senkou_b_p:])
+            l_sb = min(lows[-senkou_b_p:])
+            result["ichimoku_senkou_b"] = round((h_sb + l_sb) / 2, 4)
+
+        if len(closes) >= kijun_p:
+            result["ichimoku_chikou"] = round(closes[-1], 4)
+
+        # Ichimoku signal: цена vs облако
+        sa = result.get("ichimoku_senkou_a")
+        sb = result.get("ichimoku_senkou_b")
+        if sa is not None and sb is not None:
+            cloud_top = max(sa, sb)
+            cloud_bottom = min(sa, sb)
+            last_c = closes[-1]
+            if last_c > cloud_top:
+                result["ichimoku_signal"] = "bullish"
+            elif last_c < cloud_bottom:
+                result["ichimoku_signal"] = "bearish"
+            else:
+                result["ichimoku_signal"] = "in_cloud"
+
+    # ══════════════ Parabolic SAR ══════════════
+    if len(highs) >= 2 and len(lows) >= 2:
+        af = 0.02
+        af_max = 0.20
+        af_step = 0.02
+
+        # Направление определяем по первым двум свечам
+        is_long = closes[1] >= closes[0]
+        if is_long:
+            ep = highs[0]
+            sar_val = lows[0]
+        else:
+            ep = lows[0]
+            sar_val = highs[0]
+
+        for i in range(1, len(highs)):
+            prev_sar = sar_val
+
+            if is_long:
+                sar_val = prev_sar + af * (ep - prev_sar)
+                sar_val = min(sar_val, lows[i - 1])
+                if i >= 2:
+                    sar_val = min(sar_val, lows[i - 2])
+
+                if lows[i] < sar_val:
+                    is_long = False
+                    sar_val = ep
+                    ep = lows[i]
+                    af = af_step
+                else:
+                    if highs[i] > ep:
+                        ep = highs[i]
+                        af = min(af + af_step, af_max)
+            else:
+                sar_val = prev_sar + af * (ep - prev_sar)
+                sar_val = max(sar_val, highs[i - 1])
+                if i >= 2:
+                    sar_val = max(sar_val, highs[i - 2])
+
+                if highs[i] > sar_val:
+                    is_long = True
+                    sar_val = ep
+                    ep = highs[i]
+                    af = af_step
+                else:
+                    if lows[i] < ep:
+                        ep = lows[i]
+                        af = min(af + af_step, af_max)
+
+        result["psar"] = round(sar_val, 4)
+        result["psar_direction"] = "long" if is_long else "short"
+
+    # ══════════════ Pivot Points (Classic) ══════════════
+    if len(highs) >= 1 and len(lows) >= 1 and len(closes) >= 1:
+        # Используем последнюю свечу (или предпоследнюю — классика использует prev day)
+        h_p = highs[-1]
+        l_p = lows[-1]
+        c_p = closes[-1]
+        pivot_val = (h_p + l_p + c_p) / 3
+
+        result["pivot"] = round(pivot_val, 4)
+        result["pivot_r1"] = round(2 * pivot_val - l_p, 4)
+        result["pivot_s1"] = round(2 * pivot_val - h_p, 4)
+        result["pivot_r2"] = round(pivot_val + (h_p - l_p), 4)
+        result["pivot_s2"] = round(pivot_val - (h_p - l_p), 4)
+        result["pivot_r3"] = round(pivot_val + 2 * (h_p - l_p), 4)
+        result["pivot_s3"] = round(pivot_val - 2 * (h_p - l_p), 4)
+
+    # ══════════════ Fibonacci Retracements ══════════════
+    if len(highs) >= 2 and len(lows) >= 2:
+        fib_high = max(highs)
+        fib_low = min(lows)
+        diff = fib_high - fib_low
+
+        result["fib_high"] = round(fib_high, 4)
+        result["fib_low"] = round(fib_low, 4)
+        result["fib_236"] = round(fib_high - diff * 0.236, 4)
+        result["fib_382"] = round(fib_high - diff * 0.382, 4)
+        result["fib_500"] = round(fib_high - diff * 0.500, 4)
+        result["fib_618"] = round(fib_high - diff * 0.618, 4)
+        result["fib_786"] = round(fib_high - diff * 0.786, 4)
+
+    # ══════════════ Momentum(10) / ROC(10) ══════════════
+    roc_period = 10
+    if len(closes) > roc_period:
+        result["momentum_10"] = round(closes[-1] - closes[-1 - roc_period], 4)
+        if closes[-1 - roc_period] != 0:
+            result["roc_10"] = round((closes[-1] / closes[-1 - roc_period] - 1) * 100, 2)
+
+    # ══════════════ Chaikin Money Flow(20) ══════════════
+    cmf_period = 20
+    if len(closes) >= cmf_period and len(highs) >= cmf_period and len(lows) >= cmf_period and len(volumes) >= cmf_period:
+        mfv_sum = 0.0
+        vol_sum = 0.0
+        start = len(closes) - cmf_period
+        for i in range(start, len(closes)):
+            h_cmf = highs[i]
+            l_cmf = lows[i]
+            c_cmf = closes[i]
+            v_cmf = volumes[i]
+            hl_diff = h_cmf - l_cmf
+            if hl_diff > 0:
+                mfm = ((c_cmf - l_cmf) - (h_cmf - c_cmf)) / hl_diff
+                mfv_sum += mfm * v_cmf
+                vol_sum += v_cmf
+
+        if vol_sum > 0:
+            cmf_val = mfv_sum / vol_sum
+            result["cmf_20"] = round(cmf_val, 4)
+            if cmf_val > 0.05:
+                result["cmf_signal"] = "buying_pressure"
+            elif cmf_val < -0.05:
+                result["cmf_signal"] = "selling_pressure"
+            else:
+                result["cmf_signal"] = "neutral"
 
     return result
 
@@ -2298,6 +2589,17 @@ def etf_screener(
     ma_signal: str | None = None,
     adx_min: float | None = None,
     macd_signal: str | None = None,
+    stochastic_min: float | None = None,
+    stochastic_max: float | None = None,
+    cci_min: float | None = None,
+    cci_max: float | None = None,
+    williams_min: float | None = None,
+    williams_max: float | None = None,
+    ichimoku_signal: str | None = None,
+    psar_direction: str | None = None,
+    cmf_signal: str | None = None,
+    roc_min: float | None = None,
+    roc_max: float | None = None,
     premium_discount_max: float | None = None,
     tracking_error_max: float | None = None,
     include_indicators: bool = True,
@@ -2329,11 +2631,19 @@ def etf_screener(
         ma_signal — 'golden_cross' (MA50>MA200), 'death_cross' (MA50<MA200)
         adx_min — минимальный ADX (сила тренда)
         macd_signal — 'bullish', 'bearish'
+        stochastic_min/stochastic_max — Stochastic %K(14,3,3)
+        cci_min/cci_max — CCI(20)
+        williams_min/williams_max — Williams %R(14) (от −100 до 0)
+        ichimoku_signal — 'bullish', 'bearish', 'in_cloud'
+        psar_direction — 'long', 'short'
+        cmf_signal — 'buying_pressure', 'selling_pressure', 'neutral'
+        roc_min/roc_max — Rate of Change(10), %
         premium_discount_max — макс. премия/дисконт к NAV (%)
         tracking_error_max — макс. трекинг-ошибка (%)
-        include_indicators — рассчитывать ли RSI/MA/MACD/ADX (default True)
+        include_indicators — рассчитывать ли TA-индикаторы (default True)
         sort_by — сортировка: 'performance', 'volatility', 'sharpe', 'volume',
-            'spread', 'premium', 'rsi', 'adx', 'beta'
+            'spread', 'premium', 'rsi', 'adx', 'beta', 'stochastic', 'cci',
+            'williams', 'roc', 'cmf', 'momentum'
         sort_desc — True = по убыванию
         limit — максимум результатов (1..200, default 15)
 
@@ -2346,9 +2656,20 @@ def etf_screener(
            inav_price, premium_discount_pct,
            performance_1m/3m/6m/1y, ytd,
            volatility_ann, sharpe, max_drawdown, beta,
-           rsi_14, ma_50, ma_200, ma_signal,
+           rsi_14, stochastic_k, stochastic_d,
+           ma_50, ma_200, ma_signal,
            macd, macd_signal_line, macd_histogram, macd_signal,
-           adx, trend_strength,
+           bollinger_pct, bollinger_width,
+           adx, plus_di, minus_di, trend_strength,
+           atr_14, atr_14_pct,
+           obv, obv_trend,
+           vwap,
+           cci_20,
+           williams_r,
+           ichimoku_signal,
+           psar, psar_direction,
+           momentum_10, roc_10,
+           cmf_20, cmf_signal,
            tracking_error_ann}]}
     """
     limit = max(1, min(limit, 200))
@@ -2587,7 +2908,7 @@ def etf_screener(
     if beta_max is not None:
         filtered = [f for f in filtered if f.get("beta") is not None and f["beta"] <= beta_max]
 
-    # ── Шаг 8: расчёт RSI, MA, MACD, ADX ──
+    # ── Шаг 8: расчёт TA-индикаторов ──
     if include_indicators:
         for fund in filtered:
             sid = fund["secid"]
@@ -2598,7 +2919,11 @@ def etf_screener(
             if len(closes) < 14:
                 continue
 
-            # RSI(14)
+            highs_ta = [r["high"] for r in candles_raw if r.get("high")]
+            lows_ta = [r["low"] for r in candles_raw if r.get("low")]
+            volumes_ta = [r["volume"] for r in candles_raw if r.get("volume")]
+
+            # ── RSI(14) ──
             rsi_period = 14
             if len(closes) >= rsi_period + 1:
                 gains = []
@@ -2620,7 +2945,7 @@ def etf_screener(
                     rs = avg_gain / avg_loss
                     fund["rsi_14"] = round(100 - 100 / (1 + rs), 2)
 
-            # MA50, MA200
+            # ── MA50, MA200 ──
             def _sma_val(data: list[float], period: int) -> float | None:
                 if len(data) < period:
                     return None
@@ -2636,7 +2961,7 @@ def etf_screener(
             else:
                 fund["ma_signal"] = "insufficient_data"
 
-            # MACD(12, 26, 9)
+            # ── MACD(12, 26, 9) ──
             def _ema_val(data: list[float], period: int) -> list[float]:
                 if len(data) < period:
                     return []
@@ -2660,54 +2985,228 @@ def etf_screener(
                     fund["macd_histogram"] = round(histogram, 4)
                     fund["macd_signal"] = "bullish" if histogram > 0 else ("bearish" if histogram < 0 else "neutral")
 
-            # ADX(14)
-            highs = [r["high"] for r in candles_raw if r.get("high")]
-            lows = [r["low"] for r in candles_raw if r.get("low")]
+            # ── Stochastic %K/%D(14,3,3) ──
+            stoch_period = 14
+            if len(closes) >= stoch_period and len(highs_ta) >= stoch_period and len(lows_ta) >= stoch_period:
+                stoch_k_values = []
+                for i in range(stoch_period - 1, len(closes)):
+                    window_h = highs_ta[i - stoch_period + 1:i + 1]
+                    window_l = lows_ta[i - stoch_period + 1:i + 1]
+                    hh = max(window_h)
+                    ll = min(window_l)
+                    if hh == ll:
+                        stoch_k_values.append(50.0)
+                    else:
+                        stoch_k_values.append((closes[i] - ll) / (hh - ll) * 100)
+                if len(stoch_k_values) >= 3:
+                    fund["stochastic_k"] = round(sum(stoch_k_values[-3:]) / 3, 2)
+                if len(stoch_k_values) >= 5:
+                    d_vals = []
+                    for i in range(2, len(stoch_k_values)):
+                        d_vals.append(sum(stoch_k_values[i - 2:i + 1]) / 3)
+                    fund["stochastic_d"] = round(d_vals[-1], 2)
 
-            adx_period = 14
-            if len(highs) >= adx_period + 1 and len(lows) >= adx_period + 1:
-                adx_closes = [r["close"] for r in candles_raw if r.get("close")]
-                tr_list = []
-                plus_dm = []
-                minus_dm = []
-                for i in range(1, len(highs)):
-                    h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], adx_closes[i-1]
-                    tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-                    tr_list.append(tr)
-                    up_move = h - prev_h
-                    down_move = prev_l - l
-                    plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
-                    minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
+            # ── Bollinger Bands(20,2) ──
+            bb_period = 20
+            if len(closes) >= bb_period:
+                bb_sma = sum(closes[-bb_period:]) / bb_period
+                variance = sum((c - bb_sma) ** 2 for c in closes[-bb_period:]) / bb_period
+                bb_std = variance ** 0.5
+                bb_upper = bb_sma + 2 * bb_std
+                bb_lower = bb_sma - 2 * bb_std
+                fund["bollinger_width"] = round(4 * bb_std / bb_sma * 100, 2) if bb_sma else None
+                band_range = bb_upper - bb_lower
+                if band_range > 0:
+                    fund["bollinger_pct"] = round((closes[-1] - bb_lower) / band_range, 4)
 
-                if len(tr_list) >= adx_period:
-                    atr = sum(tr_list[:adx_period])
-                    apdm = sum(plus_dm[:adx_period])
-                    amdm = sum(minus_dm[:adx_period])
-                    dx_list = []
-                    for i in range(adx_period, len(tr_list)):
-                        atr = atr - atr / adx_period + tr_list[i]
-                        apdm = apdm - apdm / adx_period + plus_dm[i]
-                        amdm = amdm - amdm / adx_period + minus_dm[i]
-                        if atr > 0:
-                            plus_di = 100 * apdm / atr
-                            minus_di = 100 * amdm / atr
-                            di_sum = plus_di + minus_di
-                            if di_sum > 0:
-                                dx_list.append(abs(plus_di - minus_di) / di_sum * 100)
+            # ── ADX(14) ──
+            if len(highs_ta) >= 2 and len(lows_ta) >= 2:
+                adx_closes = closes[:min(len(highs_ta), len(lows_ta), len(closes))]
+                adx_period = 14
+                if len(highs_ta) >= adx_period + 1 and len(lows_ta) >= adx_period + 1:
+                    tr_list = []
+                    plus_dm = []
+                    minus_dm = []
+                    for i in range(1, len(highs_ta)):
+                        h, l, prev_h, prev_l, prev_c = highs_ta[i], lows_ta[i], highs_ta[i-1], lows_ta[i-1], adx_closes[i-1]
+                        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+                        tr_list.append(tr)
+                        up_move = h - prev_h
+                        down_move = prev_l - l
+                        plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
+                        minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
 
-                    if len(dx_list) >= adx_period:
-                        adx_val = sum(dx_list[:adx_period]) / adx_period
-                        for i in range(adx_period, len(dx_list)):
-                            adx_val = (adx_val * (adx_period - 1) + dx_list[i]) / adx_period
-                        fund["adx"] = round(adx_val, 2)
-                        if adx_val >= 40:
-                            fund["trend_strength"] = "very_strong"
-                        elif adx_val >= 25:
-                            fund["trend_strength"] = "strong"
-                        elif adx_val >= 20:
-                            fund["trend_strength"] = "moderate"
+                    if len(tr_list) >= adx_period:
+                        atr_raw = sum(tr_list[:adx_period])
+                        apdm = sum(plus_dm[:adx_period])
+                        amdm = sum(minus_dm[:adx_period])
+                        dx_list = []
+                        for i in range(adx_period, len(tr_list)):
+                            atr_raw = atr_raw - atr_raw / adx_period + tr_list[i]
+                            apdm = apdm - apdm / adx_period + plus_dm[i]
+                            amdm = amdm - amdm / adx_period + minus_dm[i]
+                            if atr_raw > 0:
+                                plus_di = 100 * apdm / atr_raw
+                                minus_di = 100 * amdm / atr_raw
+                                di_sum = plus_di + minus_di
+                                if di_sum > 0:
+                                    dx_list.append(abs(plus_di - minus_di) / di_sum * 100)
+
+                        if len(dx_list) >= adx_period:
+                            adx_val = sum(dx_list[:adx_period]) / adx_period
+                            for i in range(adx_period, len(dx_list)):
+                                adx_val = (adx_val * (adx_period - 1) + dx_list[i]) / adx_period
+                            fund["adx"] = round(adx_val, 2)
+                            if adx_val >= 40:
+                                fund["trend_strength"] = "very_strong"
+                            elif adx_val >= 25:
+                                fund["trend_strength"] = "strong"
+                            elif adx_val >= 20:
+                                fund["trend_strength"] = "moderate"
+                            else:
+                                fund["trend_strength"] = "weak"
+
+            # ── ATR(14) ──
+            if len(highs_ta) >= 2 and len(lows_ta) >= 2:
+                tr_list_atr = []
+                for i in range(1, len(highs_ta)):
+                    h, l, prev_c = highs_ta[i], lows_ta[i], closes[i-1]
+                    tr_list_atr.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+                ws_period = 14
+                if len(tr_list_atr) >= ws_period:
+                    atr_s = sum(tr_list_atr[:ws_period]) / ws_period
+                    for i in range(ws_period, len(tr_list_atr)):
+                        atr_s = (atr_s * (ws_period - 1) + tr_list_atr[i]) / ws_period
+                    fund["atr_14"] = round(atr_s, 4)
+                    fund["atr_14_pct"] = round(atr_s / closes[-1] * 100, 2) if closes[-1] else None
+
+            # ── VWAP ──
+            if len(closes) >= 1 and len(highs_ta) >= 1 and len(lows_ta) >= 1 and len(volumes_ta) >= 1:
+                n_tp = min(len(closes), len(highs_ta), len(lows_ta), len(volumes_ta))
+                cum_tp_vol = 0.0
+                cum_vol = 0.0
+                for i in range(n_tp):
+                    tp = (highs_ta[i] + lows_ta[i] + closes[i]) / 3
+                    cum_tp_vol += tp * volumes_ta[i]
+                    cum_vol += volumes_ta[i]
+                if cum_vol > 0:
+                    fund["vwap"] = round(cum_tp_vol / cum_vol, 4)
+
+            # ── CCI(20) ──
+            cci_period = 20
+            n_cci = min(len(closes), len(highs_ta), len(lows_ta))
+            if n_cci >= cci_period:
+                typical_prices = [(highs_ta[i] + lows_ta[i] + closes[i]) / 3 for i in range(n_cci)]
+                tp_sma = sum(typical_prices[-cci_period:]) / cci_period
+                mean_dev = sum(abs(tp - tp_sma) for tp in typical_prices[-cci_period:]) / cci_period
+                if mean_dev > 0:
+                    fund["cci_20"] = round((typical_prices[-1] - tp_sma) / (0.015 * mean_dev), 2)
+
+            # ── Williams %R(14) ──
+            wr_period = 14
+            n_wr = min(len(closes), len(highs_ta), len(lows_ta))
+            if n_wr >= wr_period:
+                hh_wr = max(highs_ta[-wr_period:])
+                ll_wr = min(lows_ta[-wr_period:])
+                if hh_wr != ll_wr:
+                    fund["williams_r"] = round((hh_wr - closes[-1]) / (hh_wr - ll_wr) * -100, 2)
+
+            # ── Ichimoku signal ──
+            tenkan_p, kijun_p, senkou_b_p = 9, 26, 52
+            if n_wr >= senkou_b_p:
+                if len(highs_ta) >= tenkan_p and len(lows_ta) >= tenkan_p:
+                    tk = (max(highs_ta[-tenkan_p:]) + min(lows_ta[-tenkan_p:])) / 2
+                else:
+                    tk = None
+                if len(highs_ta) >= kijun_p and len(lows_ta) >= kijun_p:
+                    kj = (max(highs_ta[-kijun_p:]) + min(lows_ta[-kijun_p:])) / 2
+                else:
+                    kj = None
+                if tk is not None and kj is not None:
+                    sa = (tk + kj) / 2
+                    sb = (max(highs_ta[-senkou_b_p:]) + min(lows_ta[-senkou_b_p:])) / 2
+                    cloud_top = max(sa, sb)
+                    cloud_bottom = min(sa, sb)
+                    if closes[-1] > cloud_top:
+                        fund["ichimoku_signal"] = "bullish"
+                    elif closes[-1] < cloud_bottom:
+                        fund["ichimoku_signal"] = "bearish"
+                    else:
+                        fund["ichimoku_signal"] = "in_cloud"
+
+            # ── Parabolic SAR ──
+            if len(highs_ta) >= 2 and len(lows_ta) >= 2:
+                af = 0.02
+                af_max = 0.20
+                af_step = 0.02
+                is_long = closes[1] >= closes[0]
+                if is_long:
+                    ep = highs_ta[0]
+                    sar_val = lows_ta[0]
+                else:
+                    ep = lows_ta[0]
+                    sar_val = highs_ta[0]
+                for i in range(1, len(highs_ta)):
+                    prev_sar = sar_val
+                    if is_long:
+                        sar_val = prev_sar + af * (ep - prev_sar)
+                        sar_val = min(sar_val, lows_ta[i - 1])
+                        if i >= 2:
+                            sar_val = min(sar_val, lows_ta[i - 2])
+                        if lows_ta[i] < sar_val:
+                            is_long = False
+                            sar_val = ep
+                            ep = lows_ta[i]
+                            af = af_step
                         else:
-                            fund["trend_strength"] = "weak"
+                            if highs_ta[i] > ep:
+                                ep = highs_ta[i]
+                                af = min(af + af_step, af_max)
+                    else:
+                        sar_val = prev_sar + af * (ep - prev_sar)
+                        sar_val = max(sar_val, highs_ta[i - 1])
+                        if i >= 2:
+                            sar_val = max(sar_val, highs_ta[i - 2])
+                        if highs_ta[i] > sar_val:
+                            is_long = True
+                            sar_val = ep
+                            ep = highs_ta[i]
+                            af = af_step
+                        else:
+                            if lows_ta[i] < ep:
+                                ep = lows_ta[i]
+                                af = min(af + af_step, af_max)
+                fund["psar"] = round(sar_val, 4)
+                fund["psar_direction"] = "long" if is_long else "short"
+
+            # ── Momentum(10) / ROC(10) ──
+            roc_period = 10
+            if len(closes) > roc_period:
+                fund["momentum_10"] = round(closes[-1] - closes[-1 - roc_period], 4)
+                if closes[-1 - roc_period] != 0:
+                    fund["roc_10"] = round((closes[-1] / closes[-1 - roc_period] - 1) * 100, 2)
+
+            # ── Chaikin Money Flow(20) ──
+            cmf_period = 20
+            n_cmf = min(len(closes), len(highs_ta), len(lows_ta), len(volumes_ta))
+            if n_cmf >= cmf_period:
+                mfv_sum = 0.0
+                vol_sum = 0.0
+                for i in range(n_cmf - cmf_period, n_cmf):
+                    hl_diff = highs_ta[i] - lows_ta[i]
+                    if hl_diff > 0:
+                        mfm = ((closes[i] - lows_ta[i]) - (highs_ta[i] - closes[i])) / hl_diff
+                        mfv_sum += mfm * volumes_ta[i]
+                        vol_sum += volumes_ta[i]
+                if vol_sum > 0:
+                    cmf_val = mfv_sum / vol_sum
+                    fund["cmf_20"] = round(cmf_val, 4)
+                    if cmf_val > 0.05:
+                        fund["cmf_signal"] = "buying_pressure"
+                    elif cmf_val < -0.05:
+                        fund["cmf_signal"] = "selling_pressure"
+                    else:
+                        fund["cmf_signal"] = "neutral"
 
     # Фильтрация по RSI
     if rsi_min is not None:
@@ -2728,6 +3227,45 @@ def etf_screener(
     if macd_signal:
         macd_lower = macd_signal.lower()
         filtered = [f for f in filtered if f.get("macd_signal", "").lower() == macd_lower]
+
+    # Фильтр по Stochastic %K
+    if stochastic_min is not None:
+        filtered = [f for f in filtered if f.get("stochastic_k") is not None and f["stochastic_k"] >= stochastic_min]
+    if stochastic_max is not None:
+        filtered = [f for f in filtered if f.get("stochastic_k") is not None and f["stochastic_k"] <= stochastic_max]
+
+    # Фильтр по CCI
+    if cci_min is not None:
+        filtered = [f for f in filtered if f.get("cci_20") is not None and f["cci_20"] >= cci_min]
+    if cci_max is not None:
+        filtered = [f for f in filtered if f.get("cci_20") is not None and f["cci_20"] <= cci_max]
+
+    # Фильтр по Williams %R
+    if williams_min is not None:
+        filtered = [f for f in filtered if f.get("williams_r") is not None and f["williams_r"] >= williams_min]
+    if williams_max is not None:
+        filtered = [f for f in filtered if f.get("williams_r") is not None and f["williams_r"] <= williams_max]
+
+    # Фильтр по Ichimoku signal
+    if ichimoku_signal:
+        ich_lower = ichimoku_signal.lower()
+        filtered = [f for f in filtered if f.get("ichimoku_signal", "").lower() == ich_lower]
+
+    # Фильтр по Parabolic SAR direction
+    if psar_direction:
+        psar_lower = psar_direction.lower()
+        filtered = [f for f in filtered if f.get("psar_direction", "").lower() == psar_lower]
+
+    # Фильтр по Chaikin Money Flow signal
+    if cmf_signal:
+        cmf_lower = cmf_signal.lower()
+        filtered = [f for f in filtered if f.get("cmf_signal", "").lower() == cmf_lower]
+
+    # Фильтр по ROC
+    if roc_min is not None:
+        filtered = [f for f in filtered if f.get("roc_10") is not None and f["roc_10"] >= roc_min]
+    if roc_max is not None:
+        filtered = [f for f in filtered if f.get("roc_10") is not None and f["roc_10"] <= roc_max]
 
     # ── Шаг 9: премия/дисконт и трекинг-ошибка (только для фильтров) ──
     if premium_discount_max is not None:
@@ -2757,6 +3295,12 @@ def etf_screener(
         "rsi": "rsi_14",
         "adx": "adx",
         "beta": "beta",
+        "stochastic": "stochastic_k",
+        "cci": "cci_20",
+        "williams": "williams_r",
+        "roc": "roc_10",
+        "cmf": "cmf_20",
+        "momentum": "momentum_10",
     }
     sort_field = sort_field_map.get(sort_by, perf_field)
 
