@@ -20,7 +20,7 @@ from pathlib import Path
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import Icon
+from mcp.types import Icon, ToolAnnotations
 
 from . import bonds, cbr, fundamental, moex, portfolio, raexpert, rate, smartlab, vsezpif
 
@@ -173,6 +173,23 @@ def _load_icons() -> list[Icon] | None:
 
 _event_store = InMemoryEventStore()
 
+# ── Annotation presets (all ru-finance tools are read-only data fetchers) ──
+_RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
+_RO_OPEN = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=True)
+
+
+def _tool(**kw):
+    """Shorthand: @_tool() with universal read-only annotations."""
+    kw.setdefault("annotations", _RO)
+    return mcp.tool(**kw)
+
+
+def _tool_open(**kw):
+    """Shorthand: @_tool() with open-world read-only annotations (MOEX/SmartLab/RAExpert)."""
+    kw.setdefault("annotations", _RO_OPEN)
+    return mcp.tool(**kw)
+
+
 mcp = FastMCP(
     "ru-finance",
     icons=_load_icons(),
@@ -190,7 +207,7 @@ mcp = FastMCP(
 
 
 # ─────────────────────────── Utilities ───────────────────────────
-@mcp.tool()
+@_tool()
 def current_datetime() -> dict:
     """Server date and time (UTC+0, ISO 8601).
 
@@ -208,7 +225,7 @@ def current_datetime() -> dict:
 
 
 # ─────────────────────────── MOEX (Moscow Exchange) ───────────────────────────
-@mcp.tool()
+@_tool()
 def moex_resolve(query: str) -> dict:
     """Lookup a single security by ticker/ISIN/name.
 
@@ -219,23 +236,18 @@ def moex_resolve(query: str) -> dict:
     return moex.resolve(query)
 
 
-@mcp.tool()
+@_tool()
 def moex_search(query: str, sec_type: str | None = None) -> list[dict]:
     """Search MOEX securities by ticker/ISIN/name.
 
-    Args: query — 'Сбербанк', 'Тинькофф', 'SBER', 'RU000A10C6F7'.
-          sec_type — optional filter: 'bond', 'share', 'stock', 'fund', 'etf', 'index'.
+    Args: query, sec_type — optional filter (ref://moex-sec-types).
     Returns [{secid, shortname, isin, type, group, is_traded, engine, market, board}].
-    Only actively traded (is_traded=1) securities are returned.
-    Examples:
-      moex_search("Сбербанк")                      → all Sberbank securities
-      moex_search("Сбербанк", sec_type="bond")      → only bonds
-      moex_search("Тинькофф", sec_type="fund")      → only funds
+    Only actively traded (is_traded=1) are returned.
     """
     return moex.resolve(query, sec_type=sec_type, as_list=True, traded_only=True)
 
 
-@mcp.tool()
+@_tool()
 def moex_quote(query: str) -> dict:
     """Normalized quote for a share/fund with fallback pricing.
 
@@ -247,7 +259,7 @@ def moex_quote(query: str) -> dict:
     return moex.quote(query)
 
 
-@mcp.tool()
+@_tool()
 def moex_bond(query: str) -> dict:
     """Bond data: price %, YTM, duration (years & modified), coupon, maturity, accrued interest.
 
@@ -262,7 +274,7 @@ def moex_bond(query: str) -> dict:
     return moex.bond(query)
 
 
-@mcp.tool()
+@_tool()
 async def moex_emitent_bonds(
     query: str,
     ctx: Context,
@@ -271,23 +283,16 @@ async def moex_emitent_bonds(
 ) -> list[dict]:
     """All bonds of an issuer with optional duration filter.
 
-    Args: query — issuer name/ticker ('Газпром', 'Сбербанк', 'ГТЛК',
-          'Атомэнергопром'). Returns bonds whose emitent_id matches the issuer.
-          min_duration/max_duration — filter by duration in years
-          (Macaulay duration, fallback: years-to-maturity).
-          Pass None to leave a bound unbound.
-
-    Returns [{secid, shortname, isin, board, is_traded, emitent, issuer_name,
-    face_value, face_unit, coupon_pct, coupon_period, next_coupon, maturity,
-    offer_date, accrued_int, duration_years, mod_duration_years,
-    years_to_maturity, price_pct, ytm, value_today, vol_today}].
-    Sorted by duration (shortest first).
+    Args: query — issuer name/ticker ('Газпром', 'ГТЛК').
+    min_duration/max_duration — Macaulay duration (years), None=unbound.
+    Returns [{secid, shortname, isin, coupon_pct, maturity, price_pct, ytm,
+    duration_years, accrued_int, value_today, ...}]. Sorted by duration.
     """
     await ctx.report_progress(0, 2, "Fetching issuer bonds")
     return moex.emitent_bonds(query, min_duration, max_duration)
 
 
-@mcp.tool()
+@_tool()
 def moex_bond_coupons(query: str) -> list[dict]:
     """Coupon schedule (past + future) from NSD/MOEX.
 
@@ -298,7 +303,7 @@ def moex_bond_coupons(query: str) -> list[dict]:
     return moex.bond_coupons(query)
 
 
-@mcp.tool()
+@_tool()
 def moex_candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
     """OHLCV candles for a period.
 
@@ -310,7 +315,7 @@ def moex_candles(query: str, frm: str, till: str, interval: str = "") -> list[di
     return moex.candles(query, frm, till, interval)
 
 
-@mcp.tool()
+@_tool()
 def moex_full_history(query: str, frm: str, till: str) -> list[dict]:
     """Daily trading history with all fields for a date range.
 
@@ -321,7 +326,7 @@ def moex_full_history(query: str, frm: str, till: str) -> list[dict]:
     return moex.history(query, frm, till)
 
 
-@mcp.tool()
+@_tool()
 def moex_history(query: str, frm: str, till: str) -> list[dict]:
     """Daily trading history with minimal fields for a date range.
 
@@ -332,7 +337,7 @@ def moex_history(query: str, frm: str, till: str) -> list[dict]:
     return [{"TRADEDATE": r["TRADEDATE"], "CLOSE": r["CLOSE"], "VOLUME": r["VOLUME"]} for r in full]
 
 
-@mcp.tool()
+@_tool()
 def moex_search_endpoints(pattern: str) -> list[dict]:
     """Find ISS endpoints by path substring (for raw data access).
 
@@ -342,7 +347,7 @@ def moex_search_endpoints(pattern: str) -> list[dict]:
     return moex.search_endpoints(pattern)
 
 
-@mcp.tool()
+@_tool()
 def moex_query(template_id: int, path_vars: dict | None = None,
                query_params: dict | None = None) -> dict:
     """Generic access to any ISS endpoint by template_id.
@@ -355,7 +360,7 @@ def moex_query(template_id: int, path_vars: dict | None = None,
 
 
 # ───────────────────── MOEX: corporate info (CCI/NSD) ─────────────────────
-@mcp.tool()
+@_tool()
 def moex_company_info(query: str) -> dict:
     """Company lookup by INN/OGRN/name.
 
@@ -366,7 +371,7 @@ def moex_company_info(query: str) -> dict:
     return moex.company_info(query)
 
 
-@mcp.tool()
+@_tool()
 def moex_company_info_by_id(company_id: int) -> dict:
     """Company lookup by internal MOEX ID (basis_company_id).
 
@@ -376,7 +381,7 @@ def moex_company_info_by_id(company_id: int) -> dict:
     return moex.company_info_by_id(company_id)
 
 
-@mcp.tool()
+@_tool()
 def moex_ir_calendar(limit: int = 50) -> list[dict]:
     """IR events calendar (earnings dates for public companies).
 
@@ -387,7 +392,7 @@ def moex_ir_calendar(limit: int = 50) -> list[dict]:
 
 
 # ───────────────────── MOEX: market stats ─────────────────────
-@mcp.tool()
+@_tool()
 def moex_market_capitalization() -> dict:
     """Stock market capitalization (₽).
 
@@ -396,7 +401,7 @@ def moex_market_capitalization() -> dict:
     return moex.market_capitalization()
 
 
-@mcp.tool()
+@_tool()
 def moex_correlations(secid: str) -> list[dict]:
     """Correlation coefficients and beta for a security.
 
@@ -406,7 +411,7 @@ def moex_correlations(secid: str) -> list[dict]:
     return moex.correlations(secid)
 
 
-@mcp.tool()
+@_tool()
 def moex_splits(secid: str | None = None) -> list[dict]:
     """Splits and reverse-splits reference.
 
@@ -417,7 +422,7 @@ def moex_splits(secid: str | None = None) -> list[dict]:
 
 
 # ───────────────────── MOEX: bond market ─────────────────────
-@mcp.tool()
+@_tool()
 def moex_bond_market_aggregates(frm: str | None = None,
                                 till: str | None = None) -> list[dict]:
     """Aggregated bond market indicators.
@@ -428,7 +433,7 @@ def moex_bond_market_aggregates(frm: str | None = None,
     return moex.bond_market_aggregates(frm, till)
 
 
-@mcp.tool()
+@_tool()
 def moex_zcyc_history(frm: str, till: str) -> list[dict]:
     """ZCYC (Zero-Coupon Yield Curve) parameters history.
 
@@ -439,7 +444,7 @@ def moex_zcyc_history(frm: str, till: str) -> list[dict]:
 
 
 # ───────────────────── MOEX: activity and rates ─────────────────────
-@mcp.tool()
+@_tool()
 def moex_turnovers() -> list[dict]:
     """Aggregated trading volumes by market (exchange summary).
 
@@ -449,7 +454,7 @@ def moex_turnovers() -> list[dict]:
     return moex.turnovers()
 
 
-@mcp.tool()
+@_tool()
 def moex_sitenews(limit: int = 20) -> list[dict]:
     """Moscow Exchange news feed.
 
@@ -459,7 +464,7 @@ def moex_sitenews(limit: int = 20) -> list[dict]:
     return moex.sitenews(limit)
 
 
-@mcp.tool()
+@_tool()
 def moex_aggregates(query: str, date: str) -> dict:
     """Daily trading summary for a security.
 
@@ -469,7 +474,7 @@ def moex_aggregates(query: str, date: str) -> dict:
     return moex.aggregates(query, date)
 
 
-@mcp.tool()
+@_tool()
 def moex_indicative_rates(frm: str | None = None,
                           till: str | None = None) -> list[dict]:
     """Indicative FX rates from derivatives market.
@@ -481,43 +486,28 @@ def moex_indicative_rates(frm: str | None = None,
 
 
 # ───────────────────── Derivatives (futures / options) ─────────────────────
-@mcp.tool()
+@_tool()
 def moex_futures_list(asset_code: str) -> list[dict]:
     """FORTS futures contracts catalog with market data and spec.
 
-    Valid asset_code values (see ref://futures-underlying-assets):
-      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
-      Indices: RTS, MREI, MXI, RVI, IMOEX.
-      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
-      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
-
-    Args: asset_code — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'GAZR').
-    Returns [{secid, name, asset_code, expiry_date, lot_volume, min_step,
-    step_price, initial_margin, last_settle_price, open_interest, oichange,
-    bid, offer, last, high, low, volume_today, value_today, ...}].
+    asset_code — ref://futures-underlying-assets (case-insensitive, e.g. 'Si', 'RTS', 'BR').
+    Returns [{secid, name, expiry_date, last_settle_price, open_interest, bid, offer, ...}].
     """
     return moex.futures_list(asset_code)
 
 
-@mcp.tool()
+@_tool()
 def moex_futures_open_interest(asset: str) -> dict:
     """Open interest breakdown by legal/physical persons.
 
-    Valid asset_code values (see ref://futures-underlying-assets):
-      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
-      Indices: RTS, MREI, MXI, RVI, IMOEX.
-      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
-      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
-
-    Args: asset — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'SBRF').
-    Returns: {asset, tradedate, juridical: {oi_long, oi_short, oi_change_...},
+    asset — ref://futures-underlying-assets (case-insensitive).
+    Returns: {asset, tradedate, juridical: {oi_long, oi_short, ...},
     physical: {...}, total_oi_long, total_oi_short}.
-    Shows who (retail vs professional) is building/reducing positions.
     """
     return moex.futures_open_interest(asset)
 
 
-@mcp.tool()
+@_tool()
 def moex_futures_series(asset: str | None = None) -> list[dict]:
     """Futures expiration calendar — contracts with settlement dates.
 
@@ -529,7 +519,7 @@ def moex_futures_series(asset: str | None = None) -> list[dict]:
     return moex.futures_series(asset)
 
 
-@mcp.tool()
+@_tool()
 def moex_futures_promo() -> dict:
     """FORTS aggregated fee statistics.
 
@@ -538,30 +528,20 @@ def moex_futures_promo() -> dict:
     return moex.futures_promo()
 
 
-@mcp.tool()
+@_tool()
 async def moex_futures_basis(asset_code: str, ctx: Context) -> dict:
     """Futures contango / backwardation — annualised carry from basis.
 
-    Compares futures settle price to the underlying spot price (FX rate from CBR,
-    stock/index/commodity from MOEX) and annualises the spread to expiry.
-    Positive → contango (sell futures + buy spot); negative → backwardation.
-
-    Valid asset_code values (see ref://futures-underlying-assets):
-      FX: Si→USD, Eu→EUR, CNY, CHF, GBP, JPY, HKD, TRY, KZT, BYN.
-      Indices: RTS, MREI, MXI, RVI, IMOEX.
-      Commodities: BR, GOLD, GL, SV, SLVR, PL, CU, NI.
-      Equity: SBRF→SBER, GAZR→GAZP, LKOH, GMKN, MGNT, ROSN, SIBN, VTBR, TATN, ALRS, FEES, MTSI→MTSS, NlNK→NKNC.
-
-    Args: asset_code — underlying code (case-insensitive, e.g. 'Si', 'RTS', 'BR', 'SBRF').
-    Returns: {asset_code, underlying: {price, source}, regime,
-    contracts: [{secid, name, expiry_date, days_to_expiry, futures_price,
+    Compares futures settle to spot (FX→CBR, equity/commodity→MOEX) and annualises the spread.
+    Positive → contango; negative → backwardation. asset_code — ref://futures-underlying-assets.
+    Returns: {asset_code, regime, contracts: [{secid, expiry_date, futures_price,
     spot_price, basis_pct, annualized_return_pct, open_interest}]}.
     """
     await ctx.report_progress(0, 3, "Fetching futures data")
     return moex.futures_basis(asset_code)
 
 
-@mcp.tool()
+@_tool()
 def moex_options_assets() -> list[dict]:
     """FORTS options underlying assets with market data.
 
@@ -572,7 +552,7 @@ def moex_options_assets() -> list[dict]:
     return moex.options_assets()
 
 
-@mcp.tool()
+@_tool()
 def moex_options_board(asset: str) -> dict:
     """Option board (volatility, strikes, OI) for underlying.
 
@@ -584,7 +564,7 @@ def moex_options_board(asset: str) -> dict:
     return moex.options_board(asset)
 
 
-@mcp.tool()
+@_tool()
 def moex_option_quote(secid: str) -> dict:
     """Single option instrument quote.
 
@@ -597,7 +577,7 @@ def moex_option_quote(secid: str) -> dict:
     return moex.option_quote(secid)
 
 
-@mcp.tool()
+@_tool()
 def moex_option_orderbook(secid: str) -> dict:
     """Best bid/offer for an option instrument.
 
@@ -609,7 +589,7 @@ def moex_option_orderbook(secid: str) -> dict:
     return moex.option_orderbook(secid)
 
 
-@mcp.tool()
+@_tool()
 def moex_option_history(secid: str, frm: str | None = None,
                         till: str | None = None) -> list[dict]:
     """Option trade history.
@@ -623,7 +603,7 @@ def moex_option_history(secid: str, frm: str | None = None,
 
 
 # ─────────────────────────── Dividends (smart-lab.ru) ───────────────────────────
-@mcp.tool()
+@_tool()
 async def smartlab_dividends(ctx: Context, limit: int = 50) -> list[dict]:
     """Upcoming dividends calendar from smart-lab.ru.
 
@@ -635,7 +615,7 @@ async def smartlab_dividends(ctx: Context, limit: int = 50) -> list[dict]:
     return smartlab.get_upcoming_dividends(limit)
 
 
-@mcp.tool()
+@_tool()
 async def smartlab_dividend_history(ticker: str, ctx: Context) -> list[dict]:
     """Dividend history by ticker from smart-lab.ru.
 
@@ -648,7 +628,7 @@ async def smartlab_dividend_history(ticker: str, ctx: Context) -> list[dict]:
 
 
 # ─────────────────── Fundamental screener (smart-lab.ru) ───────────────────
-@mcp.tool()
+@_tool()
 async def smartlab_stock_screener(
     ctx: Context,
     period: str = "LTM",
@@ -670,31 +650,13 @@ async def smartlab_stock_screener(
     """Fast fundamental stock screener for MOEX (all stocks in one request).
 
     Source: smart-lab.ru/q/shares_fundamental2/ (LTM data, 4h cache).
-    Returns one HTTP request with all stocks and key multiples:
-    [{ticker, name, market_cap, ev, revenue, net_income, div_yield,
-      div_yield_priv, div_payout_ratio, p_e, p_s, p_b, ev_ebitda,
-      ebitda_margin, debt_ebitda, report_type}].
-
-    Args:
-        period: reporting period ('LTM', '2025', '2024', ...)
-        report_type: accounting standard ('-1'=any, 'MSFO', 'RSBU')
-        sector_id: sector filter (1=NEFTEGAZ, 2=BANKI, 3=METALL, 4=ELEKTRO,
-            5=RITEYL, 6=TELECOM, 7=TRANSPORT, 8=BUILDERS, 9=MACHINE,
-            13=CONSUMER, 14=FINANCE, 15=HIGH TECH, 21=METALL colour,
-            25=INTERNET, 26=AGRO, 29=PHARMA, ...)
-        capitalization_min: min market cap in RUB (e.g. 10_000_000_000)
-        capitalization_max: max market cap in RUB
-        volume_min: min avg daily volume in RUB
-        volume_max: max avg daily volume in RUB
-        company_type: ''=all, 'growth', 'value'
-        is_state_owned: -1=all, 1=state, 0=private
-        is_exporter: -1=all, 1=export, 0=domestic
-        is_raw_stuff: -1=all, 1=commodity, 0=non-commodity
-        emitent: company name substring (case-insensitive), e.g. 'Сбер', 'Лукойл'
-        order_by: sort field (market_cap, ev, revenue, p_e, p_s, p_b,
-            ev_ebitda, ebitda_margin, debt_ebitda, div_yield, net_income)
-        order_dir: 'asc' or 'desc'
-        limit: max results to return
+    Args: period ('LTM'/'2025'/...), report_type ('-1'=any/'MSFO'/'RSBU'),
+    sector_id (int, smart-lab sector codes), capitalization_min/max (RUB),
+    volume_min/max (RUB), company_type (''/'growth'/'value'),
+    is_state_owned/exporter/raw_stuff (-1=all, 1=yes, 0=no),
+    emitent (name substring), order_by (market_cap/p_e/div_yield/...),
+    order_dir ('asc'/'desc'), limit (default 15).
+    Returns [{ticker, name, market_cap, ev, revenue, net_income, div_yield, p_e, p_s, p_b, ev_ebitda, ...}].
     """
     await ctx.report_progress(0, 2, "Fetching stock screener from smart-lab.ru")
     return smartlab.get_stock_screener(
@@ -716,7 +678,7 @@ async def smartlab_stock_screener(
     )
 
 
-@mcp.tool()
+@_tool()
 async def smartlab_company_financials(
     ticker: str,
     ctx: Context,
@@ -730,32 +692,9 @@ async def smartlab_company_financials(
     Returns multi-year financial statements with LTM:
     {ticker, name, years, data: {field: {label, values: {year: val, "LTM": val}}}}.
 
-    Available fields (grouped):
-    Valuation: p_e, p_s, p_b, p_bv, p_fcf, ev_ebitda, ev, market_cap,
-        eps, bv_share, fcf_share, free_float, fcf_yield
-    Income: revenue, ebitda, operating_income, net_income, net_income_ns,
-        cost_of_production, opex, amortization, employment_expenses,
-        interest_expenses
-    Cash flow: ocf, fcf, capex, capex_revenue
-    Balance: assets, net_assets, book_value, debt, net_debt, cash,
-        goodwill, intangible_assets, investment_portfolio
-    Profitability: roe, roa, ebitda_margin, net_margin
-    Leverage: debt_ebitda
-    Dividends: dividend, dividend_pr, div_yield, div_yield_priv,
-        dividend_payout, div_payout_ratio
-    Share info: common_share, priv_share, number_of_shares,
-        number_of_priv_shares
-    Banking: net_operating_income, net_interest_income, commission_income,
-        bank_assets, capital, loan_portfolio, deposits,
-        core_capital_adequacy_ratio, total_capital_adequacy_ratio,
-        cost_of_risk_ratio, cost_to_income, loan_to_deposit_ratio,
-        share_of_non_performing_loans
-
-    Args:
-        ticker: stock ticker (e.g. 'SBER', 'LKOH', 'GAZP')
-        period: 'y'=annual, 'q'=quarterly
-        standard: 'MSFO'=IFRS, 'RSBU'=RAS
-        fields: list of field names to extract. None or ['*'] = all available.
+    Available fields by group — see ref://smartlab-financials-fields.
+    Args: ticker, period ('y'=annual, 'q'=quarterly), standard (ref://standard-values),
+          fields (list[str] | None, None=[' * ']=all).
     """
     await ctx.report_progress(0, 2, f"Fetching financials for {ticker}")
     return smartlab.get_company_financials(
@@ -763,7 +702,7 @@ async def smartlab_company_financials(
     )
 
 
-@mcp.tool()
+@_tool()
 async def smartlab_company_financials_multi(
     tickers: list[str],
     ctx: Context,
@@ -771,17 +710,11 @@ async def smartlab_company_financials_multi(
     standard: str = "MSFO",
     fields: list[str] | None = None,
 ) -> list[dict]:
-    """Detailed financial profiles for multiple companies (one request per ticker).
+    """Financial profiles for multiple companies (one request per ticker).
 
-    Same as smartlab_company_financials but for a batch of tickers.
-    Each ticker is fetched independently with caching; errors on individual
-    tickers don't stop processing of the rest.
-
-    Args:
-        tickers: list of tickers, e.g. ['SBER', 'LKOH', 'GAZP']
-        period: 'y'=annual, 'q'=quarterly
-        standard: 'MSFO'=IFRS, 'RSBU'=RAS
-        fields: list of field names, None or ['*'] = all.
+    Same as smartlab_company_financials but batched. Fields — ref://smartlab-financials-fields.
+    Args: tickers (list[str]), period ('y'/'q'), standard (ref://standard-values),
+          fields (list[str] | None, None=['*']=all).
     """
     n = len(tickers)
     await ctx.report_progress(0, n, f"Fetching financials for {n} companies")
@@ -791,53 +724,35 @@ async def smartlab_company_financials_multi(
 
 
 # ─────────────────── Fundamental analysis tools ───────────────────
-@mcp.tool()
+@_tool()
 async def stock_f_score(ticker: str, ctx: Context,
                         standard: str = "MSFO") -> dict:
     """Piotroski F-Score (0–9) for a stock.
 
-    9 binary signals from financial statements:
-    1. ROA > 0
-    2. Operating cash flow > 0
-    3. ROA improving y/y
-    4. OCF > net income (accrual quality)
-    5. Debt/Assets decreasing
-    6. Assets growing (liquidity proxy)
-    7. No share dilution
-    8. EBITDA margin improving
-    9. Asset turnover (revenue/assets) improving
-
-    Score >= 7 = strong, 4-6 = moderate, <= 3 = weak.
-
-    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    9 binary signals from financials (ROA>0, OCF>0, improving ROA/debt/margins, etc.).
+    ≥7=strong, 4–6=moderate, ≤3=weak.
+    Args: ticker, standard (ref://standard-values).
     Returns: {ticker, name, f_score, max, signals, details, years}.
     """
     await ctx.report_progress(0, 2, f"Calculating F-Score for {ticker}")
     return fundamental.f_score(ticker, standard=standard)
 
 
-@mcp.tool()
+@_tool()
 async def stock_z_score(ticker: str, ctx: Context,
                         standard: str = "MSFO") -> dict:
     """Altman Z-Score (modified for emerging markets) for a stock.
 
-    Model Z' = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4 where:
-    X1 = working capital / assets (proxy from net_debt)
-    X2 = retained earnings / assets (proxy: book_value / assets)
-    X3 = EBIT / assets (operating_income / assets)
-    X4 = equity / liabilities (proxy: market_cap / debt)
-
-    Zones: Z' > 2.9 = safe, 1.23–2.9 = grey, < 1.23 = distress.
-    Note: uses available proxies; some components may be approximate.
-
-    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Z' = 6.56·X1 + 3.26·X2 + 6.72·X3 + 1.05·X4 (X1–X4 from financials).
+    Zones: Z' > 2.9 = safe, 1.23–2.9 = grey, < 1.23 = distress. Uses proxies.
+    Args: ticker, standard (ref://standard-values).
     Returns: {ticker, name, z_score, zone, thresholds, components, missing, model}.
     """
     await ctx.report_progress(0, 2, f"Calculating Z-Score for {ticker}")
     return fundamental.z_score(ticker, standard=standard)
 
 
-@mcp.tool()
+@_tool()
 async def stock_peer_comparison(ticker: str, ctx: Context,
                                 limit: int = 20) -> dict:
     """Compare stock multiples against top peers by market cap.
@@ -854,7 +769,7 @@ async def stock_peer_comparison(ticker: str, ctx: Context,
     return fundamental.peer_comparison(ticker, limit=limit)
 
 
-@mcp.tool()
+@_tool()
 async def dividend_analysis(ticker: str, ctx: Context) -> dict:
     """Dividend analysis: CAGR, average yield, payment consistency.
 
@@ -873,7 +788,7 @@ async def dividend_analysis(ticker: str, ctx: Context) -> dict:
     return fundamental.dividend_analysis(ticker)
 
 
-@mcp.tool()
+@_tool()
 async def stock_growth_analysis(ticker: str, ctx: Context,
                                 standard: str = "MSFO") -> dict:
     """Multi-year growth analysis: revenue/EBITDA/net income CAGR, ROE/ROA/margin trends.
@@ -884,7 +799,7 @@ async def stock_growth_analysis(ticker: str, ctx: Context,
     - EBITDA CAGR
     - Historical series for ROE, ROA, EBITDA margin, net margin
 
-    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Args: ticker — stock ticker; standard — ref://standard-values.
     Returns: {ticker, name, standard, period_years, cagr: {revenue, net_income, ebitda},
               series: {revenue, net_income, ebitda, roe, roa, ebitda_margin, net_margin}}.
     """
@@ -892,7 +807,7 @@ async def stock_growth_analysis(ticker: str, ctx: Context,
     return fundamental.growth_analysis(ticker, standard=standard)
 
 
-@mcp.tool()
+@_tool()
 async def bank_benchmark(tickers: list[str], ctx: Context,
                          standard: str = "MSFO") -> list[dict]:
     """Benchmark banks by key banking metrics.
@@ -901,7 +816,7 @@ async def bank_benchmark(tickers: list[str], ctx: Context,
     across a list of bank tickers.
 
     Args: tickers — list of bank tickers (e.g. ['SBER', 'VTBR', 'TCSG']).
-          standard — 'MSFO' or 'RSBU'.
+          standard — ref://standard-values.
     Returns: [{ticker, name, net_intertest_margin, cost_to_income,
                share_of_non_performing_loans, core_capital_adequacy_ratio,
                loan_to_deposit_ratio, cost_of_risk_ratio, bank_margin, ...}].
@@ -911,7 +826,7 @@ async def bank_benchmark(tickers: list[str], ctx: Context,
     return fundamental.bank_benchmark(tickers, standard=standard)
 
 
-@mcp.tool()
+@_tool()
 async def bank_peer_comparison(ticker: str, ctx: Context) -> dict:
     """Rank a bank against the BANKI sector on key banking metrics.
 
@@ -926,7 +841,7 @@ async def bank_peer_comparison(ticker: str, ctx: Context) -> dict:
     return fundamental.bank_peer_comparison(ticker)
 
 
-@mcp.tool()
+@_tool()
 async def company_fundamental_report(ticker: str, ctx: Context,
                                      standard: str = "MSFO") -> dict:
     """All-in-one company fundamental snapshot.
@@ -936,7 +851,7 @@ async def company_fundamental_report(ticker: str, ctx: Context,
     - Dividend summary (CAGR, avg yield, consistency, last 3 years)
     - Credit rating (Expert RA, if available)
 
-    Args: ticker — stock ticker; standard — 'MSFO' or 'RSBU'.
+    Args: ticker — stock ticker; standard — ref://standard-values.
     Returns: {ticker, metrics: {...}, dividends: {...}, credit_rating: [...], standard}.
     """
     await ctx.report_progress(0, 3, f"Building report for {ticker}")
@@ -944,7 +859,7 @@ async def company_fundamental_report(ticker: str, ctx: Context,
 
 
 # ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
-@mcp.tool()
+@_tool()
 async def raexpert_rating(query: str, ctx: Context) -> list[dict]:
     """Credit rating of issuer or bond from Expert RA.
 
@@ -962,7 +877,7 @@ async def raexpert_rating(query: str, ctx: Context) -> list[dict]:
     return raexpert.rating_search(query)
 
 
-@mcp.tool()
+@_tool()
 async def raexpert_emitent_ratings(
     ctx: Context,
     rating_min: str | None = None,
@@ -973,32 +888,17 @@ async def raexpert_emitent_ratings(
     Source: raexpert.ru (rating data, 4h cache) + MOEX sector indices (mapping).
     Returns only emitents (companies/banks/insurers), not individual bond emissions.
 
-    Rating filter: keeps emitents with rating >= rating_min (e.g. 'ruBBB-' = investment
-    grade and above). Entries with 'отозван' (revoked) are excluded when filtering.
-    Rating scale (descending): ruAAA(19) > ruAA+(18) > ruAA(17) > ruAA-(16) >
-      ruA+(15) > ruA(14) > ruA-(13) > ruBBB+(12) > ruBBB(11) > ruBBB-(10) >
-      ruBB+(9) > ruBB(8) > ruBB-(7) > ruB+(6) > ruB(5) > ruB-(4) > ruCCC(3).
-
-    Sector filter: matches ~100 major emitents from MOEX sectoral stock indices
-      (MOEXFN, MOEXOG, etc.) by company name. Available sectors: Финансовый,
-      Нефтегазовый, Потребительский, Телекоммуникации, Электроэнергетика,
-      Транспорт, Металлургия и добыча, Недвижимость, Химия, Инновации и IT.
-      Covers only public companies traded on MOEX; non-listed companies in these
-      sectors won't match.
-
-    Args (all optional — without args returns all emitents with revoked):
-      rating_min — minimum rating ('ruBBB−', 'ruA+', 'ruA', 'ruAA-', ...).
-      sector — MOEX sector name (exact match from the list above).
-
-    Returns [{name, rating, outlook, date, category, sector?, agency}].
-    Results sorted by rating (best first), then by name.
+    Rating filter: keeps emitents with rating >= rating_min ('ruBBB-' = investment grade).
+    Rating scale — ref://raexpert-ratings. Sector values — ref://moex-sectors.
+    Args: rating_min, sector (both optional — without args returns all emitents).
+    Returns [{name, rating, outlook, date, category, sector?, agency}], sorted by rating.
     """
     await ctx.report_progress(0, 2, "Fetching emitent ratings")
     return raexpert.emitent_rating_search(rating_min=rating_min, sector=sector)
 
 
 # ─────────────────────────── ZPIF payments (vsezpif.ru) ───────────────────────────
-@mcp.tool()
+@_tool()
 async def zpif_payments(
     ctx: Context,
     fund_name: str | None = None,
@@ -1045,7 +945,7 @@ async def zpif_payments(
     }
 
 
-@mcp.tool()
+@_tool()
 def zpif_funds_list() -> list[dict]:
     """List of ЗПИФ funds from vsezpif.ru.
 
@@ -1055,7 +955,7 @@ def zpif_funds_list() -> list[dict]:
 
 
 # ─────────────────────────── CBR (Central Bank of Russia) ───────────────────────────
-@mcp.tool()
+@_tool()
 def cbr_key_rate(first_date: str | None = None, last_date: str | None = None,
                  tail: int = 30) -> dict:
     """CBR key rate — main driver for bonds and RUB.
@@ -1066,14 +966,14 @@ def cbr_key_rate(first_date: str | None = None, last_date: str | None = None,
     return cbr.key_rate(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_ruonia(first_date: str | None = None, last_date: str | None = None,
                tail: int = 30) -> dict:
     """RUONIA overnight (% annualized) — money market rate, market rate benchmark."""
     return cbr.ruonia(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_ruonia_index(first_date: str | None = None, last_date: str | None = None,
                      tail: int = 12) -> dict:
     """RUONIA index + term averages (1m/3m/6m, % annualized) — short end of curve.
@@ -1083,34 +983,34 @@ def cbr_ruonia_index(first_date: str | None = None, last_date: str | None = None
     return cbr.ruonia_index(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_ibor(first_date: str | None = None, last_date: str | None = None,
              tail: int = 12) -> dict:
     """MIACR — actual weighted interbank rates (MosPrime/MIBOR discontinued)."""
     return cbr.ibor(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_currency(symbol: str, first_date: str, last_date: str, tail: int = 30) -> dict:
     """CBR FX rate vs RUB. symbol: 'USD','EUR','CNY'. Dates 'YYYY-MM-DD'."""
     return cbr.currency(symbol, first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_metals(first_date: str | None = None, last_date: str | None = None,
                tail: int = 12) -> dict:
     """CBR precious metals prices (gold/silver/platinum/palladium)."""
     return cbr.metals(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_reserves(first_date: str | None = None, last_date: str | None = None,
                  tail: int = 12) -> dict:
     """Russia international reserves (gold + FX)."""
     return cbr.reserves(first_date, last_date, tail)
 
 
-@mcp.tool()
+@_tool()
 def cbr_inflation(first_date: str | None = None, last_date: str | None = None,
                   tail: int = 24) -> dict:
     """CPI inflation (YoY %) and CBR key rate (monthly, from 2013).
@@ -1126,18 +1026,14 @@ def cbr_inflation(first_date: str | None = None, last_date: str | None = None,
 
 
 # ─────────────────────────── Bond math ───────────────────────────
-@mcp.tool()
+@_tool()
 async def bond_report(query: str, ctx: Context) -> dict:
     """Deep bond analysis: metrics + rate scenarios + spread to curve + convexity.
 
     Args: query — OFZ number/ISIN.
-    Returns: {bond, years_to_maturity, convexity, accrued_interest, gry, spread_to_curve,
-    scenarios, twist_scenarios, real_return}.
-    scenarios — total return for ±bp parallel shift + breakeven point.
-    twist_scenarios — curve steepening/flattening scenarios.
-    spread_to_curve — YTM spread to G-curve at matching duration.
-    gry — gross redemption yield (YTM + accrued).
-    real_return — yield vs CPI (Rosstat) + scenarios under different assumptions.
+    Returns: {bond, years_to_maturity, convexity, accrued_interest, gry,
+    scenarios (±bp shift + breakeven), twist_scenarios (steepening/flattening),
+    spread_to_curve (vs G-curve at duration), real_return (vs CPI)}.
     """
     await ctx.report_progress(0, 5, "Fetching bond data")
     b = moex.bond(query)
@@ -1215,7 +1111,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
     return rep
 
 
-@mcp.tool()
+@_tool()
 def bond_accrued_interest(query: str) -> dict:
     """Accrued coupon interest (НКД) for a bond.
 
@@ -1230,28 +1126,15 @@ def bond_accrued_interest(query: str) -> dict:
         date.today(), b["maturity"], b["coupon_pct"], b.get("face_value") or 1000, freq)
 
 
-@mcp.tool()
+@_tool()
 async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
                          reinvest_rate: float | None = None) -> dict:
     """Synthetic yield with coupon reinvestment over investment horizon.
 
-    Calculates IRR of the full cash flow: buy at dirty price, coupons
-    reinvested at reinvest_rate (default: YTM), sell at assumed YTM at
-    horizon (or receive face if horizon >= maturity).
-
-    Args:
-        query — OFZ number/ISIN ('26253' or 'RU000A10C6F7').
-        horizon_years — investment horizon in years (e.g. 3.0).
-        reinvest_rate — coupon reinvestment rate, % annualized (optional,
-            defaults to current YTM).
-
-    Returns: {irr_pct, ytm_pct, horizon_years, reinvest_rate_pct,
-    buy_price_rub, total_coupons_rub, reinvested_coupons_rub,
-    final_value_rub, total_at_horizon_rub, total_return_pct,
-    annualized_return_pct, coupon_count, note}.
-
-    irr_pct — annualized internal rate of return of the full strategy.
-    Comparison with ytm_pct shows the impact of reinvestment assumptions.
+    Calculates IRR of full cash flow: buy at dirty price, coupons reinvested at
+    reinvest_rate (default: YTM), sell at assumed YTM at horizon (or face at maturity).
+    Args: query (ISIN/OFZ), horizon_years, reinvest_rate (% p.a., optional).
+    Returns: {irr_pct, ytm_pct, total_return_pct, annualized_return_pct, note}.
     """
     await ctx.report_progress(0, 3, "Fetching bond data")
     b = moex.bond(query)
@@ -1274,7 +1157,7 @@ async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
     return result
 
 
-@mcp.tool()
+@_tool()
 async def bond_screener(
     ctx: Context,
     ytm_min: float | None = None,
@@ -1308,45 +1191,13 @@ async def bond_screener(
 ) -> dict:
     """Bond screener: filter MOEX bonds by multiple criteria simultaneously.
 
-    Loads all bonds from TQCB (corporate) and TQOB (OFZ) boards, applies
-    filters, optionally enriches with Expert RA credit ratings and
-    qualified-investor status.
-
-    Args:
-        ytm_min/ytm_max — yield to maturity (%), inclusive bounds.
-        coupon_min/coupon_max — coupon rate (%), inclusive.
-        price_min/price_max — clean price (% of face), inclusive.
-        maturity_from/maturity_to — maturity date ('YYYY-MM-DD').
-        duration_min/duration_max — Macaulay duration (years).
-        has_offer — True: only bonds with offer/call/put dates; False: without.
-        has_amortization — True: only amortizing bonds; False: only bullet.
-        coupon_type — 'fixed' (fixed), 'float' (floating), 'amortization' (amortizing).
-        coupon_freq_min/coupon_freq_max — coupon payments per year (1,2,4,6,12).
-        currency — face value currency ('SUR', 'USD', 'EUR', 'CNY').
-        issue_volume_min/issue_volume_max — issue size (number of bonds).
-        accrued_int_min/accrued_int_max — accrued interest (RUB per bond).
-        rating_min — minimum Expert RA rating ('ruBBB-' = investment grade).
-            Ratings from raexpert.ru, 4h cache. Does not cover all issuers.
-        sector — MOEX sector of the issuer (e.g. 'Финансовый', 'Нефтегазовый').
-            Covers ~100 largest issuers via MOEX sector indices.
-        emitent — issuer name substring (case-insensitive), e.g. 'Сбер', 'Газпром'.
-        include_qualified — add is_qualified field (ISQUALIFIEDINVESTORS).
-            Adds a per-bond ISS request (parallel, max 200).
-        qualified_only — True: only qualified-investor bonds; False: only
-            regular-investor bonds; None: no filter. Requires include_qualified=True.
-        sort_by — sort field: 'ytm', 'duration', 'maturity', 'price', 'coupon',
-            'issue_volume'. Default 'ytm'.
-        sort_desc — True = descending (default).
-        limit — max results (1..500, default 15).
-
+    Full param reference — see ref://bond-screener-params (types, ranges, enums, sort fields).
+    Key filters: ytm/coupon/price/duration bounds, maturity range, coupon_type,
+    currency, issue_volume, accrued_int, rating_min (ref://raexpert-ratings),
+    sector (ref://moex-sectors), emitent, include_qualified, sort_by, limit.
     Returns: {count_shown, count_total_matching, count_all_bonds,
-    bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm,
-    coupon_pct, coupon_freq, duration_years, mod_duration_years,
-    maturity, years_to_maturity, offer_date, has_offer,
-    bond_type, is_amortization, face_unit, face_value, accrued_int,
-    issue_size, issue_size_placed, list_level,
-    value_today, vol_today, num_trades, bid_ask_spread_pct,
-    rating, sector, is_qualified?}]}.
+    bonds: [{secid, shortname, isin, board, emitent, price_pct, ytm, coupon_pct,
+    duration_years, maturity, offer_date, bond_type, accrued_int, rating, sector, ...}]}.
     """
     await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
     result = moex.bond_screener(
@@ -1369,7 +1220,7 @@ async def bond_screener(
     return result
 
 
-@mcp.tool()
+@_tool()
 async def price_volatility(query: str, ctx: Context, days: int = 90, rf_annual: float = 16.0) -> dict:
     """Volatility, Sharpe ratio, max drawdown from daily candles.
 
@@ -1382,7 +1233,7 @@ async def price_volatility(query: str, ctx: Context, days: int = 90, rf_annual: 
     return moex.price_volatility(query, days, rf_annual)
 
 
-@mcp.tool()
+@_tool()
 async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict:
     """Liquidity assessment: Amihud illiquidity, spread, turnover, score 0-10.
 
@@ -1397,29 +1248,20 @@ async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict
     return moex.liquidity(query, days)
 
 
-@mcp.tool()
+@_tool()
 async def technical_indicators(query: str, ctx: Context, days: int = 90) -> dict:
     """Full technical analysis suite for any MOEX instrument (stocks, ETF, bonds).
 
-    Computes from daily OHLCV candles:
-    Trend: RSI(14), Stochastic %K/%D(14,3,3), ADX(14)+DI, MACD(12,26,9),
-           ATR(14), Ichimoku(9,26,52), Parabolic SAR, EMA(12/26), SMA(50/200),
-           MA golden/death cross, Momentum(10), ROC(10).
-    Volatility: Bollinger Bands(20,2), ATR(14).
-    Volume: OBV + trend, CMF(20), VWAP.
-    Support/Resistance: Pivot Points(classic), Fibonacci retracements.
-
-    Args:
-        query — ticker or ISIN (e.g. 'SBER', 'SU26253RMFS2').
-        days — lookback period (default 90; 200+ recommended for Ichimoku/SMA200).
-    Returns: all indicators in a flat dict; keys present only when enough data.
+    Indicators — see ref://technical-indicators. Computes from daily OHLCV candles.
+    Args: query — ticker or ISIN; days — lookback (default 90, 200+ for Ichimoku/SMA200).
+    Returns: all indicators as a flat dict; keys present only when enough data.
     """
     await ctx.report_progress(0, 2, "Fetching candle data + computing indicators")
     return moex.technical_indicators(query, days)
 
 
 # ─────────────────────────── ETF / БПИФ ───────────────────────────
-@mcp.tool()
+@_tool()
 async def etf_fund_info(query: str, ctx: Context) -> dict:
     """ETF/БПИФ information: iNAV, benchmark, category, premium to NAV.
 
@@ -1434,7 +1276,7 @@ async def etf_fund_info(query: str, ctx: Context) -> dict:
     return moex.etf_fund_data(query)
 
 
-@mcp.tool()
+@_tool()
 async def etf_premium_discount(query: str, ctx: Context) -> dict:
     """ETF/БПИФ premium or discount to iNAV (indicative NAV).
 
@@ -1447,7 +1289,7 @@ async def etf_premium_discount(query: str, ctx: Context) -> dict:
     return moex.etf_premium_discount(query)
 
 
-@mcp.tool()
+@_tool()
 async def etf_tracking_error(query: str, ctx: Context, days: int = 90) -> dict:
     """ETF/БПИФ tracking error vs benchmark index over N days.
 
@@ -1463,7 +1305,7 @@ async def etf_tracking_error(query: str, ctx: Context, days: int = 90) -> dict:
     return moex.etf_tracking_error(query, days)
 
 
-@mcp.tool()
+@_tool()
 async def etf_screener(
     ctx: Context,
     category: str | None = None,
@@ -1509,65 +1351,13 @@ async def etf_screener(
 ) -> dict:
     """ETF/БПИФ screener: filter MOEX funds by multiple criteria.
 
-    Loads all funds from TQIF/TQTF boards, enriches with metadata from
-    ETF_BENCHMARK_MAP, calculates technical indicators:
-    RSI(14), Stochastic %K/%D, ADX, MACD, Bollinger Bands, ATR, OBV,
-    VWAP, CCI, Williams %R, Ichimoku, Parabolic SAR, Momentum/ROC, CMF.
+    Factors & TA indicators — see ref://etf-screener-params (dropdowns, enums, sorting).
+    TA suite — see ref://technical-indicators.
 
-    Args:
-        category — asset class: 'equity_russia', 'equity_foreign',
-            'equity_sector', 'equity_dividend', 'bond_gov', 'bond_corp',
-            'money_market', 'commodity', 'fx', 'mixed'
-        emitent — management company: 'Т-Капитал', 'Сбер', 'Альфа', 'ВТБ'
-        benchmark — benchmark ticker on MOEX: 'IMOEX', 'GOLD', 'RGBITR'
-        currency — currency: 'SUR', 'USD', 'EUR', 'CNY', 'HKD'
-        price_min/price_max — fund price (RUB)
-        volume_min/volume_max — average daily trading volume (RUB)
-        spread_max — max Bid-Ask spread (%)
-        volatility_min/volatility_max — annualized volatility (%)
-        sharpe_min/sharpe_max — Sharpe ratio
-        beta_min/beta_max — beta (vs IMOEX)
-        performance_min/performance_max — return (%)
-        performance_period — period: '1m', '3m', '6m', '1y', 'ytd'
-        rsi_min/rsi_max — RSI(14)
-        ma_signal — 'golden_cross' (MA50>MA200), 'death_cross' (MA50<MA200)
-        adx_min — minimum ADX (trend strength)
-        macd_signal — 'bullish', 'bearish'
-        stochastic_min/stochastic_max — Stochastic %K(14,3,3)
-        cci_min/cci_max — CCI(20)
-        williams_min/williams_max — Williams %R(14) (−100 to 0)
-        ichimoku_signal — 'bullish', 'bearish', 'in_cloud'
-        psar_direction — 'long', 'short'
-        cmf_signal — 'buying_pressure', 'selling_pressure', 'neutral'
-        roc_min/roc_max — Rate of Change(10), %
-        premium_discount_max — max premium/discount to NAV (%)
-        tracking_error_max — max tracking error (%)
-        include_indicators — calculate all TA indicators (default True)
-        sort_by — sort: 'performance', 'volatility', 'sharpe', 'volume',
-            'spread', 'premium', 'rsi', 'adx', 'beta', 'stochastic',
-            'cci', 'williams', 'roc', 'cmf', 'momentum'
-        sort_desc — True = descending (default)
-        limit — max results (1..200, default 15)
-
-    Returns: {count_shown, count_total_matching, count_all_funds,
-    funds: [{secid, shortname, isin, emitent, category, category_ru,
-      benchmark, benchmark_name, currency,
-      price, change_pct, bid, ask, spread_pct,
-      avg_daily_volume_rub, liquidity_score, liquidity_grade,
-      inav_price, premium_discount_pct,
-      performance_1m/3m/6m/1y, ytd,
-      volatility_ann, sharpe, max_drawdown, beta,
-      rsi_14, stochastic_k, stochastic_d,
-      ma_50, ma_200, ma_signal,
-      macd, macd_signal_line, macd_histogram, macd_signal,
-      bollinger_pct, bollinger_width,
-      adx, trend_strength, atr_14,
-      cci_20, williams_r,
-      ichimoku_signal,
-      psar, psar_direction,
-      momentum_10, roc_10,
-      cmf_20, cmf_signal,
-      tracking_error_ann}]}.
+    Key params: category, emitent, benchmark, currency, price/volume/volatility bounds,
+    sharpe/beta/performance bounds, RSI/ADX/MACD/Stochastic/CCI/Williams/Ichimoku/PSAR/CMF/ROC filters,
+    premium_discount_max, tracking_error_max, sort_by, sort_desc, limit.
+    Returns: funds list with full TA, liquidity scores, premium/discount, tracking error.
     """
     await ctx.report_progress(0, 4, "Loading all ETF/БПИФ from MOEX boards")
     return moex.etf_screener(
@@ -1615,7 +1405,7 @@ async def etf_screener(
 
 
 # ─────────────────────────── Rate expectations (OFZ G-curve) ───────────────────────────
-@mcp.tool()
+@_tool()
 async def rate_expectations(ctx: Context, key_rate: float | None = None) -> dict:
     """Market rate expectations from OFZ G-curve. Numbers only.
 
@@ -1630,7 +1420,7 @@ async def rate_expectations(ctx: Context, key_rate: float | None = None) -> dict
     return rate.rate_expectations(key_rate)
 
 
-@mcp.tool()
+@_tool()
 def curve_yield(years: float) -> dict:
     """G-curve OFZ yield at arbitrary maturity (% annualized) — for duration mapping.
 
@@ -1640,19 +1430,16 @@ def curve_yield(years: float) -> dict:
 
 
 # ─────────────────────────── Portfolio (domain reports) ───────────────────────────
-@mcp.tool()
+@_tool()
 async def portfolio_snapshot(assets: str, ctx: Context) -> dict:
-    """Portfolio snapshot: value, P&L, positions, allocation, rate risk,
-    income stream, dividend yield, real return.
+    """Portfolio snapshot: value, P&L, allocation, rate risk, income, dividend yield, real return.
 
     Args: assets — portfolio in markdown format (see TOOLS.md):
-    lines '- Name (TICKER/ISIN): N pcs. (purchase_price ...)'.
-    Type (share/bond) auto-detected by ISIN/ticker on MOEX.
+    '- Name (TICKER/ISIN): N pcs. (purchase_price ...)'.
     Bonds: price in % of face; shares/funds: in RUB.
-    Server is generic: securities come ONLY in this parameter.
-    Positions include spread_to_curve_pp, div_yield_pct.
-    income_risk — real portfolio return (running_yield − Rosstat CPI;
-    if CPI unavailable — key rate as proxy).
+    income_risk = running_yield − Rosstat CPI (fallback: key rate).
+    Returns: {total_value, total_pnl_pct, positions, allocation,
+    income_risk, ...}.
     """
     await ctx.report_progress(0, 3, "Fetching inflation data")
     try:
@@ -1664,7 +1451,7 @@ async def portfolio_snapshot(assets: str, ctx: Context) -> dict:
     return portfolio.snapshot(assets, inflation_pct=inflation_pct)
 
 
-@mcp.tool()
+@_tool()
 async def portfolio_rate_whatif(delta_pp: float, assets: str, ctx: Context) -> dict:
     """Portfolio impact of delta_pp percentage point shift in bond yields.
 
@@ -1675,7 +1462,7 @@ async def portfolio_rate_whatif(delta_pp: float, assets: str, ctx: Context) -> d
     return portfolio.rate_whatif(delta_pp, assets)
 
 
-@mcp.tool()
+@_tool()
 async def portfolio_income_calendar(assets: str, ctx: Context) -> dict:
     """Upcoming income: next coupon per bond + declared dividends.
 
@@ -1685,7 +1472,7 @@ async def portfolio_income_calendar(assets: str, ctx: Context) -> dict:
     return portfolio.income_calendar(assets)
 
 
-@mcp.tool()
+@_tool()
 def portfolio_movers(assets: str) -> dict:
     """Top gainers/losers: daily change and P&L vs purchase price (top-3 each way).
 
@@ -1853,6 +1640,194 @@ def ref_moex_sec_types() -> dict:
             {"code": "index",  "description": "MOEX indices",                         "group": "stock_index"},
         ],
     }
+
+
+# ── Additional reference resources (symlinked from tools) ──
+
+@mcp.resource(
+    "ref://technical-indicators",
+    name="technical_indicators_suite",
+    description="Full TA indicator suite computed by technical_indicators and etf_screener. "
+                "Trend: RSI(14), Stochastic %K/%D(14,3,3), ADX(14)+DI, MACD(12,26,9), ATR(14), "
+                "Ichimoku(9,26,52), Parabolic SAR, EMA(12/26), SMA(50/200), MA golden/death cross, "
+                "Momentum(10), ROC(10). Volatility: Bollinger Bands(20,2). "
+                "Volume: OBV + trend, CMF(20), VWAP. "
+                "Support/Resistance: Pivot Points (classic), Fibonacci retracements.",
+    mime_type="application/json",
+)
+def ref_technical_indicators() -> dict:
+    return {
+        "indicators": {
+            "trend": ["RSI(14)", "Stochastic_%K/%D(14,3,3)", "ADX(14)+DI", "MACD(12,26,9)",
+                      "ATR(14)", "Ichimoku(9,26,52)", "Parabolic_SAR",
+                      "EMA(12)", "EMA(26)", "SMA(50)", "SMA(200)", "MA_cross",
+                      "Momentum(10)", "ROC(10)"],
+            "volatility": ["Bollinger_Bands(20,2)", "ATR(14)"],
+            "volume": ["OBV", "CMF(20)", "VWAP"],
+            "support_resistance": ["Pivot_Points(classic)", "Fibonacci_retracements"],
+        },
+        "minimum_bars_required": {"Ichimoku": 52, "SMA_200": 200, "SMA_50": 50,
+                                  "MACD": 26, "default": 14},
+    }
+
+
+@mcp.resource(
+    "ref://standard-values",
+    name="accounting_standards",
+    description="Valid standard parameter values for financial tools (stock_f_score, stock_z_score, "
+                "stock_growth_analysis, bank_benchmark, company_fundamental_report, "
+                "smartlab_company_financials, smartlab_company_financials_multi).",
+    mime_type="application/json",
+)
+def ref_standard_values() -> dict:
+    return {
+        "standards": [
+            {"code": "MSFO", "label": "IFRS (МСФО)", "note": "default"},
+            {"code": "RSBU", "label": "RAS (РСБУ)", "note": "Russian accounting standards"},
+        ],
+    }
+
+
+@mcp.resource(
+    "ref://bond-screener-params",
+    name="bond_screener_params",
+    description="Full parameter reference for bond_screener tool: types, ranges, enums, sort fields. "
+                "Includes coupon_type values, currency codes, sort_by options, qualified-bond flags.",
+    mime_type="application/json",
+)
+def ref_bond_screener_params() -> dict:
+    return {
+        "filters": {
+            "ytm_min/ytm_max": "float [%], inclusive",
+            "coupon_min/coupon_max": "float [%], inclusive",
+            "price_min/price_max": "float [% of face], inclusive",
+            "maturity_from/maturity_to": "str YYYY-MM-DD, inclusive",
+            "duration_min/duration_max": "float [years], Macaulay",
+            "has_offer": "bool | None (True=with offer, False=bullet)",
+            "has_amortization": "bool | None (True=amortizing, False=bullet)",
+            "coupon_type": "enum: fixed, float, amortization",
+            "coupon_freq_min/coupon_freq_max": "int: 1,2,4,6,12 per year",
+            "currency": "enum: SUR, USD, EUR, CNY",
+            "issue_volume_min/issue_volume_max": "int [number of bonds]",
+            "accrued_int_min/accrued_int_max": "float [RUB/bond]",
+            "rating_min": "str — minimum Expert RA rating (ref://raexpert-ratings)",
+            "sector": "str — MOEX sector name (ref://moex-sectors)",
+            "emitent": "str — substring match (case-insensitive)",
+            "include_qualified": "bool (adds is_qualified field, per-bond ISS call)",
+            "qualified_only": "bool | None (requires include_qualified=True)",
+            "sort_by": "enum: ytm, duration, maturity, price, coupon, issue_volume (default: ytm)",
+            "sort_desc": "bool (default True)",
+            "limit": "int 1..500 (default 15)",
+        },
+    }
+
+
+@mcp.resource(
+    "ref://etf-screener-params",
+    name="etf_screener_params",
+    description="Full parameter reference for etf_screener tool: categories, emitents, "
+                "TA signal enums, performance periods, sort fields.",
+    mime_type="application/json",
+)
+def ref_etf_screener_params() -> dict:
+    return {
+        "filters": {
+            "category": "enum: equity_russia, equity_foreign, equity_sector, equity_dividend, "
+                        "bond_gov, bond_corp, money_market, commodity, fx, mixed",
+            "emitent": "enum: Т-Капитал, Сбер, Альфа, ВТБ (exact match)",
+            "benchmark": "str — MOEX index ticker (IMOEX, GOLD, RGBITR, ...)",
+            "currency": "enum: SUR, USD, EUR, CNY, HKD",
+            "performance_period": "enum: 1m, 3m, 6m, 1y, ytd (default: 1y)",
+            "ma_signal": "enum: golden_cross (MA50>MA200), death_cross (MA50<MA200)",
+            "macd_signal": "enum: bullish, bearish",
+            "ichimoku_signal": "enum: bullish, bearish, in_cloud",
+            "psar_direction": "enum: long, short",
+            "cmf_signal": "enum: buying_pressure, selling_pressure, neutral",
+            "rsi_min/rsi_max": "float (0..100)",
+            "adx_min": "float (trend strength threshold)",
+            "stochastic_min/stochastic_max": "float (Stochastic %K, 0..100)",
+            "cci_min/cci_max": "float (CCI(20))",
+            "williams_min/williams_max": "float (Williams %R, −100..0)",
+            "roc_min/roc_max": "float (Rate of Change, %)",
+            "premium_discount_max": "float [%] max premium/discount to NAV",
+            "tracking_error_max": "float [%] max annualized tracking error",
+            "sort_by": "enum: performance, volatility, sharpe, volume, spread, "
+                       "premium, rsi, adx, beta, stochastic, cci, williams, roc, cmf, momentum",
+        },
+    }
+
+
+@mcp.resource(
+    "ref://smartlab-financials-fields",
+    name="smartlab_financials_fields",
+    description="All field names accepted by smartlab_company_financials fields parameter, "
+                "grouped by statement category. Use in smartlab_company_financials and "
+                "smartlab_company_financials_multi.",
+    mime_type="application/json",
+)
+def ref_smartlab_financials_fields() -> dict:
+    return {
+        "groups": {
+            "valuation": ["p_e", "p_s", "p_b", "p_bv", "p_fcf", "ev_ebitda", "ev",
+                          "market_cap", "eps", "bv_share", "fcf_share", "free_float", "fcf_yield"],
+            "income": ["revenue", "ebitda", "operating_income", "net_income", "net_income_ns",
+                       "cost_of_production", "opex", "amortization", "employment_expenses",
+                       "interest_expenses"],
+            "cash_flow": ["ocf", "fcf", "capex", "capex_revenue"],
+            "balance": ["assets", "net_assets", "book_value", "debt", "net_debt", "cash",
+                        "goodwill", "intangible_assets", "investment_portfolio"],
+            "profitability": ["roe", "roa", "ebitda_margin", "net_margin"],
+            "leverage": ["debt_ebitda"],
+            "dividends": ["dividend", "dividend_pr", "div_yield", "div_yield_priv",
+                          "dividend_payout", "div_payout_ratio"],
+            "share_info": ["common_share", "priv_share", "number_of_shares", "number_of_priv_shares"],
+            "banking": ["net_operating_income", "net_interest_income", "commission_income",
+                        "bank_assets", "capital", "loan_portfolio", "deposits",
+                        "core_capital_adequacy_ratio", "total_capital_adequacy_ratio",
+                        "cost_of_risk_ratio", "cost_to_income", "loan_to_deposit_ratio",
+                        "share_of_non_performing_loans"],
+        },
+    }
+
+
+# ─────────────────────────── Prompts (workflow templates) ───────────────────────────
+
+@mcp.prompt()
+def analyze_bond_portfolio(assets: str) -> str:
+    """Full bond portfolio analysis workflow."""
+    return (
+        "You are analysing a bond portfolio. Follow these steps:\n"
+        "1. Call current_datetime() to get the reference date.\n"
+        "2. Call portfolio_snapshot(assets) — review allocation, duration, P&L, "
+        "spread_to_curve, running_yield, income_risk.\n"
+        "3. For each bond with |spread_to_curve_pp| > 0.5 or |income_risk| < running_yield: "
+        "call bond_report(secid) to get convexity, scenarios, twist analysis.\n"
+        "4. Call rate_expectations() — check key_rate, fwd_* forward ladder, read label. "
+        "Interpret portfolio duration vs rate path.\n"
+        "5. Call portfolio_rate_whatif(delta_pp=-1.0, assets) and portfolio_rate_whatif(delta_pp=+1.0, assets) "
+        "for parallel shift scenarios.\n"
+        "6. Summarise: allocation, rate risk (duration × rate path), credit risk (spreads), "
+        "real return (vs CPI), actionable recommendations.\n\n"
+        f"Portfolio:\n{assets}"
+    )
+
+
+@mcp.prompt()
+def screen_undervalued_stocks(sector: str | None = None, limit: int = 10) -> str:
+    """Stock screening workflow for undervalued companies."""
+    sector_filter = f" with sector_id={sector} filter" if sector else ""
+    return (
+        f"You are screening for undervalued MOEX stocks{sector_filter}.\n"
+        "1. Call smartlab_stock_screener(order_by='p_e', order_dir='asc', limit={limit}) "
+        "to find low P/E stocks.\n"
+        "2. For top candidates, call smartlab_company_financials(ticker, standard='MSFO') "
+        "— check debt_ebitda < 3, roe > 15%, revenue CAGR looking at yearly growth.\n"
+        "3. Call stock_f_score(ticker) — require f_score >= 5 for further analysis.\n"
+        "4. Call stock_z_score(ticker) — exclude Z' < 1.23 (distress zone).\n"
+        "5. Call dividend_analysis(ticker) — check payment consistency and yield.\n"
+        "6. Summarise: shortlist with P/E, ROE, F-Score, Z-Score, dividend yield, "
+        "and key risks (debt, negative FCF, sector headwinds)."
+    )
 
 
 if __name__ == "__main__":
