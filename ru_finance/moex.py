@@ -453,6 +453,8 @@ _CANDLE_INTERVALS = [
     ("4",  91),   # квартал
 ]
 
+_VALID_INTERVALS = {"", "1", "10", "60", "24", "7", "31", "4"}
+
 
 def _auto_interval(frm: str, till: str) -> str:
     d0 = datetime.fromisoformat(frm)
@@ -470,10 +472,12 @@ def _auto_interval(frm: str, till: str) -> str:
 def candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
     """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
 
-    Пустой query — ошибка. Пустой interval — авто-выбор (≤50 свечей).
+    Пустой query — ошибка. Пустой или некорректный interval — авто-выбор (≤50 свечей).
     """
     if not query or not query.strip():
         raise ValueError("moex_candles: query не может быть пустым")
+    if interval not in _VALID_INTERVALS:
+        interval = ""
     if not interval:
         interval = _auto_interval(frm, till)
     r = resolve(query)
