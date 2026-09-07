@@ -1265,6 +1265,8 @@ async def bond_screener(
     maturity_to: str | None = None,
     duration_min: float | None = None,
     duration_max: float | None = None,
+    years_to_maturity_min: float | None = None,
+    years_to_maturity_max: float | None = None,
     has_offer: bool | None = None,
     has_amortization: bool | None = None,
     coupon_type: str | None = None,
@@ -1287,7 +1289,7 @@ async def bond_screener(
     """Bond screener: filter MOEX bonds by multiple criteria simultaneously.
 
     Full param reference — see ref://bond-screener-params (types, ranges, enums, sort fields).
-    Key filters: ytm/coupon/price/duration bounds, maturity range, coupon_type,
+    Key filters: ytm/coupon/price/duration/years_to_maturity bounds, maturity range, coupon_type,
     currency, issue_volume, accrued_int, rating_min (ref://raexpert-ratings),
     sector (ref://moex-sectors), emitent, include_qualified, sort_by, limit.
     Returns: {count_shown, count_total_matching, count_all_bonds,
@@ -1301,6 +1303,7 @@ async def bond_screener(
         price_min=price_min, price_max=price_max,
         maturity_from=maturity_from, maturity_to=maturity_to,
         duration_min=duration_min, duration_max=duration_max,
+        years_to_maturity_min=years_to_maturity_min, years_to_maturity_max=years_to_maturity_max,
         has_offer=has_offer, has_amortization=has_amortization,
         coupon_type=coupon_type,
         coupon_freq_min=coupon_freq_min, coupon_freq_max=coupon_freq_max,
@@ -1798,6 +1801,7 @@ def ref_bond_screener_params() -> dict:
             "price_min/price_max": "float [% of face], inclusive",
             "maturity_from/maturity_to": "str YYYY-MM-DD, inclusive",
             "duration_min/duration_max": "float [years], Macaulay",
+            "years_to_maturity_min/years_to_maturity_max": "float [years], time to maturity",
             "has_offer": "bool | None (True=with offer, False=bullet)",
             "has_amortization": "bool | None (True=amortizing, False=bullet)",
             "coupon_type": "enum: fixed, float, amortization",

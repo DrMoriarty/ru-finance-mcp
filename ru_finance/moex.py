@@ -867,6 +867,8 @@ def bond_screener(
     maturity_to: str | None = None,
     duration_min: float | None = None,
     duration_max: float | None = None,
+    years_to_maturity_min: float | None = None,
+    years_to_maturity_max: float | None = None,
     has_offer: bool | None = None,
     has_amortization: bool | None = None,
     coupon_type: str | None = None,
@@ -898,6 +900,7 @@ def bond_screener(
         price_min/price_max — цена чистая (% от номинала)
         maturity_from/maturity_to — дата погашения ('YYYY-MM-DD')
         duration_min/duration_max — дюрация Macaulay (годы)
+        years_to_maturity_min/years_to_maturity_max — срок до погашения (годы)
         has_offer — True: только с офертой; False: только без
         has_amortization — True: только амортизируемые; False: только без
         coupon_type — 'fixed' (фиксированный), 'float' (плавающий),
@@ -982,6 +985,15 @@ def bond_screener(
         filtered = [b for b in filtered
                     if (b.get("duration_years") or b.get("years_to_maturity")) is not None
                     and (b.get("duration_years") or b.get("years_to_maturity")) <= duration_max]
+
+    if years_to_maturity_min is not None:
+        filtered = [b for b in filtered
+                    if b.get("years_to_maturity") is not None
+                    and b["years_to_maturity"] >= years_to_maturity_min]
+    if years_to_maturity_max is not None:
+        filtered = [b for b in filtered
+                    if b.get("years_to_maturity") is not None
+                    and b["years_to_maturity"] <= years_to_maturity_max]
 
     if has_offer is not None:
         filtered = [b for b in filtered if b["has_offer"] == has_offer]

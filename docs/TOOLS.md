@@ -454,6 +454,7 @@ MIACR — фактические средневзвешенные ставки �
   - `price_min`, `price_max` — чистая цена (% от номинала).
   - `maturity_from`, `maturity_to` — дата погашения (`YYYY-MM-DD`).
   - `duration_min`, `duration_max` — дюрация Маколея (годы).
+  - `years_to_maturity_min`, `years_to_maturity_max` — срок до погашения (годы).
   - `has_offer` — `True`: только с офертой; `False`: только без.
   - `has_amortization` — `True`: только амортизируемые; `False`: только без.
   - `coupon_type` — `"fixed"` (фиксированный), `"float"` (плавающий),
