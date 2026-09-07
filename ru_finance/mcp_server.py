@@ -59,7 +59,7 @@ GROUPS: dict[str, set[str]] = {
     },
     # Скринеры, ранжирование, сравнительный анализ
     "screening": {
-        "smartlab_stock_screener", "bond_screener", "etf_screener",
+        "smartlab_stock_screener", "bond_screener", "bond_prescreener", "etf_screener",
         "raexpert_emitent_ratings", "moex_correlations",
     },
     # Обнаружение ISS-эндпоинтов
@@ -1298,6 +1298,69 @@ async def bond_screener(
     """
     await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
     result = moex.bond_screener(
+        ytm_min=ytm_min, ytm_max=ytm_max,
+        coupon_min=coupon_min, coupon_max=coupon_max,
+        price_min=price_min, price_max=price_max,
+        maturity_from=maturity_from, maturity_to=maturity_to,
+        duration_min=duration_min, duration_max=duration_max,
+        years_to_maturity_min=years_to_maturity_min, years_to_maturity_max=years_to_maturity_max,
+        has_offer=has_offer, has_amortization=has_amortization,
+        coupon_type=coupon_type,
+        coupon_freq_min=coupon_freq_min, coupon_freq_max=coupon_freq_max,
+        currency=currency,
+        issue_volume_min=issue_volume_min, issue_volume_max=issue_volume_max,
+        accrued_int_min=accrued_int_min, accrued_int_max=accrued_int_max,
+        rating_min=rating_min, sector=sector, emitent=emitent,
+        include_qualified=include_qualified, qualified_only=qualified_only,
+        sort_by=sort_by, sort_desc=sort_desc, limit=limit,
+    )
+    await ctx.report_progress(3, 3, "Done")
+    return result
+
+
+@_tool()
+async def bond_prescreener(
+    ctx: Context,
+    ytm_min: float | None = None,
+    ytm_max: float | None = None,
+    coupon_min: float | None = None,
+    coupon_max: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    maturity_from: str | None = None,
+    maturity_to: str | None = None,
+    duration_min: float | None = None,
+    duration_max: float | None = None,
+    years_to_maturity_min: float | None = None,
+    years_to_maturity_max: float | None = None,
+    has_offer: bool | None = None,
+    has_amortization: bool | None = None,
+    coupon_type: str | None = None,
+    coupon_freq_min: int | None = None,
+    coupon_freq_max: int | None = None,
+    currency: str | None = None,
+    issue_volume_min: int | None = None,
+    issue_volume_max: int | None = None,
+    accrued_int_min: float | None = None,
+    accrued_int_max: float | None = None,
+    rating_min: str | None = None,
+    sector: str | None = None,
+    emitent: str | None = None,
+    include_qualified: bool = False,
+    qualified_only: bool | None = None,
+    sort_by: str = "ytm",
+    sort_desc: bool = True,
+    limit: int = 500,
+) -> dict:
+    """Bond pre-screener: compact output with only secname + isin per bond.
+
+    Same filter parameters as bond_screener, but returns only secname and ISIN
+    for each bond. Optimized for checking bond availability without context overflow.
+    Returns: {count_total_matching, count_all_bonds,
+    bonds: [{secname, isin}, ...]}.
+    """
+    await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
+    result = moex.bond_prescreener(
         ytm_min=ytm_min, ytm_max=ytm_max,
         coupon_min=coupon_min, coupon_max=coupon_max,
         price_min=price_min, price_max=price_max,

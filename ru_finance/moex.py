@@ -1118,6 +1118,243 @@ def bond_screener(
     }
 
 
+def bond_prescreener(
+    *,
+    ytm_min: float | None = None,
+    ytm_max: float | None = None,
+    coupon_min: float | None = None,
+    coupon_max: float | None = None,
+    price_min: float | None = None,
+    price_max: float | None = None,
+    maturity_from: str | None = None,
+    maturity_to: str | None = None,
+    duration_min: float | None = None,
+    duration_max: float | None = None,
+    years_to_maturity_min: float | None = None,
+    years_to_maturity_max: float | None = None,
+    has_offer: bool | None = None,
+    has_amortization: bool | None = None,
+    coupon_type: str | None = None,
+    coupon_freq_min: int | None = None,
+    coupon_freq_max: int | None = None,
+    currency: str | None = None,
+    issue_volume_min: int | None = None,
+    issue_volume_max: int | None = None,
+    accrued_int_min: float | None = None,
+    accrued_int_max: float | None = None,
+    rating_min: str | None = None,
+    sector: str | None = None,
+    emitent: str | None = None,
+    include_qualified: bool = False,
+    qualified_only: bool | None = None,
+    sort_by: str = "ytm",
+    sort_desc: bool = True,
+    limit: int = 500,
+) -> dict:
+    """Прескринер облигаций: компактный вывод (только secname + isin).
+
+    Те же параметры фильтрации, что и bond_screener, но возвращает только
+    secname и isin по каждой облигации. Оптимизирован для проверки наличия бондов
+    без переполнения контекста.
+
+    Args:
+        см. bond_screener
+
+    Returns:
+        {count_total_matching, count_all_bonds,
+         bonds: [{secname, isin}, ...]}
+    """
+    limit = max(1, min(limit, 500))
+
+    # ── Шаг 1: загрузить все облигации с бордов (параллельно) ──
+    boards_to_fetch = ["TQCB", "TQOB"]
+    board_data: list[tuple[str, dict]] = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(_fetch_board_bonds, b): b for b in boards_to_fetch}
+        for f in as_completed(futs):
+            board = futs[f]
+            try:
+                for row in f.result():
+                    board_data.append((board, row))
+            except Exception:
+                continue
+
+    # ── Шаг 2: нормализация ──
+    all_bonds: list[dict] = []
+    for board, row in board_data:
+        parsed = _parse_board_bond(row, board)
+        if parsed:
+            all_bonds.append(parsed)
+
+    # ── Шаг 3: фильтрация ──
+    filtered = all_bonds
+
+    if ytm_min is not None:
+        filtered = [b for b in filtered if b.get("ytm") is not None and b["ytm"] >= ytm_min]
+    if ytm_max is not None:
+        filtered = [b for b in filtered if b.get("ytm") is not None and b["ytm"] <= ytm_max]
+
+    if coupon_min is not None:
+        filtered = [b for b in filtered if b.get("coupon_pct") is not None and b["coupon_pct"] >= coupon_min]
+    if coupon_max is not None:
+        filtered = [b for b in filtered if b.get("coupon_pct") is not None and b["coupon_pct"] <= coupon_max]
+
+    if price_min is not None:
+        filtered = [b for b in filtered if b.get("price_pct") is not None and b["price_pct"] >= price_min]
+    if price_max is not None:
+        filtered = [b for b in filtered if b.get("price_pct") is not None and b["price_pct"] <= price_max]
+
+    if maturity_from:
+        filtered = [b for b in filtered if b.get("maturity") and b["maturity"] >= maturity_from]
+    if maturity_to:
+        filtered = [b for b in filtered if b.get("maturity") and b["maturity"] <= maturity_to]
+
+    if duration_min is not None:
+        filtered = [b for b in filtered
+                    if (b.get("duration_years") or b.get("years_to_maturity")) is not None
+                    and (b.get("duration_years") or b.get("years_to_maturity")) >= duration_min]
+    if duration_max is not None:
+        filtered = [b for b in filtered
+                    if (b.get("duration_years") or b.get("years_to_maturity")) is not None
+                    and (b.get("duration_years") or b.get("years_to_maturity")) <= duration_max]
+
+    if years_to_maturity_min is not None:
+        filtered = [b for b in filtered
+                    if b.get("years_to_maturity") is not None
+                    and b["years_to_maturity"] >= years_to_maturity_min]
+    if years_to_maturity_max is not None:
+        filtered = [b for b in filtered
+                    if b.get("years_to_maturity") is not None
+                    and b["years_to_maturity"] <= years_to_maturity_max]
+
+    if has_offer is not None:
+        filtered = [b for b in filtered if b["has_offer"] == has_offer]
+
+    if has_amortization is not None:
+        filtered = [b for b in filtered if b["is_amortization"] == has_amortization]
+
+    if coupon_type:
+        target_types = _COUPON_TYPE_MAP.get(coupon_type.lower())
+        if target_types:
+            filtered = [b for b in filtered if b.get("bond_type") in target_types]
+
+    if coupon_freq_min is not None:
+        filtered = [b for b in filtered if b["coupon_freq"] >= coupon_freq_min]
+    if coupon_freq_max is not None:
+        filtered = [b for b in filtered if b["coupon_freq"] <= coupon_freq_max]
+
+    if currency:
+        filtered = [b for b in filtered if b.get("face_unit") == currency.upper()]
+
+    if issue_volume_min is not None:
+        filtered = [b for b in filtered if b.get("issue_size") and b["issue_size"] >= issue_volume_min]
+    if issue_volume_max is not None:
+        filtered = [b for b in filtered if b.get("issue_size") and b["issue_size"] <= issue_volume_max]
+
+    if accrued_int_min is not None:
+        filtered = [b for b in filtered
+                    if b.get("accrued_int") is not None and b["accrued_int"] >= accrued_int_min]
+    if accrued_int_max is not None:
+        filtered = [b for b in filtered
+                    if b.get("accrued_int") is not None and b["accrued_int"] <= accrued_int_max]
+
+    # ── Шаг 4: кредитный рейтинг + сектор (опционально) ──
+    all_ratings_cache: list | None = None
+
+    if rating_min is not None:
+        # Рейтинги загружаются только при запросе фильтра
+        try:
+            from .raexpert import _fetch_all_ratings, _RATING_ORDER as ro
+            all_ratings_cache = _fetch_all_ratings()
+            min_score = ro.get(rating_min.strip())
+            if min_score is not None:
+                rated_filtered = []
+                for b in filtered:
+                    rating = _match_rating(b.get("emitent", ""), all_ratings_cache)
+                    b["rating"] = rating
+                    if rating and rating != "отозван" and ro.get(rating, -1) >= min_score:
+                        rated_filtered.append(b)
+                filtered = rated_filtered
+        except Exception:
+            for b in filtered:
+                b["rating"] = None
+    else:
+        for b in filtered:
+            b["rating"] = None
+
+    # Сектор — только если фильтр задан
+    if sector:
+        sector_filtered = []
+        for b in filtered:
+            s = _match_sector(b.get("emitent", ""))
+            b["sector"] = s
+            if s == sector:
+                sector_filtered.append(b)
+        filtered = sector_filtered
+    else:
+        for b in filtered:
+            b["sector"] = None
+
+    if emitent:
+        emit_lower = emitent.lower()
+        filtered = [b for b in filtered if emit_lower in (b.get("emitent") or "").lower()]
+
+    # ── Шаг 5: ISQUALIFIEDINVESTORS (опционально, параллельно) ──
+    if include_qualified:
+        secids = [b["secid"] for b in filtered[:200]]  # ограничим 200 запросами
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futs = {ex.submit(_fetch_bond_spec_qualified, sid): sid for sid in secids}
+            results: dict[str, bool | None] = {}
+            for f in as_completed(futs):
+                sid = futs[f]
+                try:
+                    results[sid] = f.result()
+                except Exception:
+                    results[sid] = None
+        for b in filtered:
+            b["is_qualified"] = results.get(b["secid"])
+
+        # Фильтр только для квалифицированных / неквалифицированных
+        if qualified_only is True:
+            filtered = [b for b in filtered if b.get("is_qualified") is True]
+        elif qualified_only is False:
+            filtered = [b for b in filtered if b.get("is_qualified") is False]
+
+    # ── Шаг 6: сортировка ──
+    _SORT_KEYS = {
+        "ytm": "ytm",
+        "duration": "duration_years",
+        "maturity": "years_to_maturity",
+        "price": "price_pct",
+        "coupon": "coupon_pct",
+        "issue_volume": "issue_size",
+    }
+    sort_field = _SORT_KEYS.get(sort_by, "ytm")
+
+    def _sort_key(b: dict) -> float:
+        v = b.get(sort_field)
+        if v is None:
+            return float("-inf") if sort_desc else float("inf")
+        return float(v)
+
+    filtered.sort(key=_sort_key, reverse=sort_desc)
+
+    # ── Шаг 7: лимит + компактный вывод ──
+    limited = filtered[:limit]
+
+    bonds = [
+        {"secname": b.get("secname") or b.get("shortname") or "", "isin": b["isin"]}
+        for b in limited
+        if b.get("isin")
+    ]
+
+    return {
+        "count_total_matching": len(filtered),
+        "count_all_bonds": len(all_bonds),
+        "bonds": bonds,
+    }
+
+
 # ─────────────────── CCI (корпоративная информация НРД) ───────────────────
 
 def company_info(query: str) -> dict:
