@@ -165,6 +165,12 @@ def _tools_for_groups(groups: set[str], source: FastMCP) -> dict[str, object]:
     }
 
 
+def _copy_resources(source: FastMCP, target: FastMCP) -> None:
+    """Copy all resources and resource templates from *source* to *target*."""
+    target._resource_manager._resources = dict(source._resource_manager._resources)
+    target._resource_manager._templates = dict(source._resource_manager._templates)
+
+
 def _create_group_server(group: str, source: FastMCP) -> FastMCP:
     """Create a FastMCP instance for a single tool group."""
     g_mcp = FastMCP(
@@ -180,6 +186,7 @@ def _create_group_server(group: str, source: FastMCP) -> FastMCP:
         warn_on_duplicate_tools=False,
     )
     g_mcp._tool_manager._tools = _tools_for_groups({group}, source)
+    _copy_resources(source, g_mcp)
     return g_mcp
 
 
@@ -198,6 +205,7 @@ def _create_role_server(role: str, source: FastMCP) -> FastMCP:
         warn_on_duplicate_tools=False,
     )
     r_mcp._tool_manager._tools = _tools_for_groups(ROLES[role], source)
+    _copy_resources(source, r_mcp)
     return r_mcp
 
 
@@ -1969,8 +1977,7 @@ if __name__ == "__main__":
                     await stack.enter_async_context(mgr.run())
                 yield
 
-        routes: list[Mount] = [Mount("/", app=_make_handler(_all_mgr))]
-        routes += [
+        routes: list[Mount] = [
             Mount(f"/g/{group}", app=_make_handler(mgr))
             for group, mgr in _group_mgrs.items()
         ]
@@ -1978,6 +1985,7 @@ if __name__ == "__main__":
             Mount(f"/{role}", app=_make_handler(mgr))
             for role, mgr in _role_mgrs.items()
         ]
+        routes += [Mount("/", app=_make_handler(_all_mgr))]
 
         app = Starlette(lifespan=_lifespan, routes=routes)
 
