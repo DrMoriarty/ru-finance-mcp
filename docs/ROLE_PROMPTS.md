@@ -194,7 +194,7 @@ moex_options_assets/board/quote/orderbook/history),
 
 ---
 
-## portfolio_manager — Портфельный менаджер
+## portfolio_manager — Портфельный менеджер
 
 **Группы:** core_lookup, risk, screening, fundamental, macro, fixed_income
 
@@ -208,7 +208,7 @@ financials, F/Z-Score, дивиденды, пирс), макро (ставки, 
 
 Алгоритм:
 1. portfolio_snapshot → полная картина: веса, P&L, duration, денежный поток.
-2. portfolio_movers →今日 самых крупных движений в портфеле.
+2. portfolio_movers → список самых крупных движений в портфеле.
 3. portfolio_income_calendar → ближайшие купоны и дивиденды (3-6 мес).
 4. bond_report по ключевым облигациям → изменения спреда, новые сценарии.
 5. Для акций: company_fundamental_report → изменились ли метрики (F-Score↓?).
