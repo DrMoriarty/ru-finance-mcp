@@ -3,8 +3,10 @@
 Запуск локально (stdio):   python -m ru_finance.mcp_server
 Запуск как remote (HTTP):  MCP_TRANSPORT=streamable-http MCP_PORT=8000 python -m ru_finance.mcp_server
   → все инструменты:        http://MCP_HOST:MCP_PORT/mcp
-  → роль-specific:          http://MCP_HOST:MCP_PORT/{role}/mcp
-    роли: market, bond, macro, portfolio, derivatives
+  → группы (одна):          http://MCP_HOST:MCP_PORT/g/{group}/mcp
+  → роли (набор групп):     http://MCP_HOST:MCP_PORT/{role}/mcp
+    роли: screener, analyst, constructor, timer, macrotracker,
+          risk_manager, instrument_specialist, portfolio_manager
   (за nginx/TLS, см. deploy/).
 Все инструменты generic — конкретные бумаги передаются параметром (portfolio_* → assets).
 Документация ручек: docs/TOOLS.md. Гайд для агента: AGENTS.md.
@@ -24,78 +26,166 @@ from mcp.types import Icon, ToolAnnotations
 
 from . import bonds, cbr, fundamental, moex, portfolio, raexpert, rate, smartlab, vsezpif
 
-# ─────────────────────────── Roles ───────────────────────────
-# Каждый инструмент принадлежит одной роли. Generic-инструменты доступны всем
-# агентам; остальные — только соответствующему агенту.
-ROLES: dict[str, set[str]] = {
-    "generic": {
+# ─────────────────────────── Tool Groups & Roles ───────────────────────────
+# Каждый инструмент принадлежит ровно одной группе. Роль = набор групп.
+# Роли и группы — просто константы; сервер собирает tool-сеты динамически.
+GROUPS: dict[str, set[str]] = {
+    # Резолв, котировки, datetime
+    "core_lookup": {
         "current_datetime", "moex_resolve", "moex_search", "moex_quote", "moex_bond",
     },
-    "market": {
-        "moex_candles", "moex_full_history", "moex_history", "moex_aggregates",
-        "moex_company_info", "moex_company_info_by_id", "moex_ir_calendar",
-        "moex_market_capitalization", "moex_correlations", "moex_splits",
-        "moex_turnovers", "moex_sitenews", "moex_indicative_rates",
-        "moex_search_endpoints", "moex_query",
+    # Рыночные показатели широкого плана
+    "market_data": {
+        "moex_turnovers", "moex_indicative_rates",
+    },
+    # OHLCV свечи и история торгов
+    "price_history": {
+        "moex_candles", "moex_history", "moex_full_history", "moex_aggregates",
+    },
+    # Фундаментал компаний + фундаментальный скоринг + дивиденды
+    "fundamental": {
+        "moex_company_info", "moex_company_info_by_id",
+        "moex_market_capitalization", "moex_ir_calendar", "moex_sitenews",
         "smartlab_dividends", "smartlab_dividend_history",
-        "smartlab_stock_screener", "smartlab_company_financials",
-        "smartlab_company_financials_multi",
-        "price_volatility", "liquidity_assessment", "technical_indicators",
-        "stock_f_score", "stock_z_score", "stock_peer_comparison",
-        "dividend_analysis", "stock_growth_analysis",
-        "bank_benchmark", "bank_peer_comparison", "company_fundamental_report",
+        "smartlab_company_financials", "smartlab_company_financials_multi",
+        "stock_f_score", "stock_z_score",
+        "stock_peer_comparison", "stock_growth_analysis",
+        "dividend_analysis", "bank_benchmark", "bank_peer_comparison",
+        "company_fundamental_report",
     },
-    "bond": {
-        "moex_emitent_bonds", "moex_bond_coupons",
-        "moex_bond_market_aggregates", "moex_zcyc_history",
-        "bond_report", "bond_accrued_interest", "bond_synthetic_yield", "bond_screener",
-        "raexpert_rating", "raexpert_emitent_ratings",
-        "zpif_payments", "zpif_funds_list",
-        "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
-        "etf_screener",
+    # Индикаторы, волатильность, сплиты
+    "technical": {
+        "price_volatility", "liquidity_assessment", "technical_indicators", "moex_splits",
     },
+    # Скринеры, ранжирование, сравнительный анализ
+    "screening": {
+        "smartlab_stock_screener", "bond_screener", "etf_screener",
+        "raexpert_emitent_ratings", "moex_correlations",
+    },
+    # Обнаружение ISS-эндпоинтов
+    "discover": {
+        "moex_search_endpoints", "moex_query",
+    },
+    # Ставки, инфляция, кривая доходности
     "macro": {
-        "cbr_key_rate", "cbr_ruonia", "cbr_ruonia_index", "cbr_ibor",
-        "cbr_currency", "cbr_metals", "cbr_reserves", "cbr_inflation",
+        "cbr_key_rate", "cbr_inflation", "cbr_ruonia", "cbr_ruonia_index", "cbr_ibor",
         "rate_expectations", "curve_yield",
     },
-    "portfolio": {
-        "portfolio_snapshot", "portfolio_rate_whatif",
-        "portfolio_income_calendar", "portfolio_movers",
+    # FX, металлы, ЗВР
+    "fx_metals": {
+        "cbr_currency", "cbr_metals", "cbr_reserves",
     },
+    # Инструменты облигаций
+    "fixed_income": {
+        "moex_emitent_bonds", "moex_bond_coupons",
+        "moex_bond_market_aggregates", "moex_zcyc_history",
+        "bond_report", "bond_accrued_interest", "bond_synthetic_yield",
+        "raexpert_rating", "zpif_payments", "zpif_funds_list",
+    },
+    # ETF/БПИФ
+    "etf": {
+        "etf_fund_info", "etf_premium_discount", "etf_tracking_error",
+    },
+    # Фьючерсы и опционы
     "derivatives": {
         "moex_futures_list", "moex_futures_open_interest",
         "moex_futures_series", "moex_futures_promo", "moex_futures_basis",
         "moex_options_assets", "moex_options_board",
         "moex_option_quote", "moex_option_orderbook", "moex_option_history",
     },
+    # Портфельный риск: снимок, сценарии, доходы
+    "risk": {
+        "portfolio_snapshot", "portfolio_rate_whatif",
+        "portfolio_income_calendar", "portfolio_movers",
+    },
 }
 
-# Обратный индекс: tool_name → role
-_TOOL_ROLE: dict[str, str] = {}
-for _role, _names in ROLES.items():
-    for _name in _names:
-        _TOOL_ROLE[_name] = _role
+# Роли: каждая — набор групп, подключаемых агенту.
+# group может входить в несколько ролей.
+ROLES: dict[str, set[str]] = {
+    # Скринер: обнаружение инструментов из широкой вселенной
+    "screener": {
+        "core_lookup", "discover", "screening", "fundamental", "macro",
+    },
+    # Аналитик: глубокий анализ конкретного инструмента
+    "analyst": {
+        "core_lookup", "price_history", "fundamental", "technical",
+        "fixed_income", "etf",
+    },
+    # Конструктор: формирование портфеля из отобранных активов
+    "constructor": {
+        "core_lookup", "screening", "risk", "fixed_income", "etf",
+    },
+    # Таймер: определение оптимальной точки входа/выхода
+    "timer": {
+        "core_lookup", "price_history", "technical", "derivatives",
+    },
+    # Макро-трекер: мониторинг ставок и макроэкономических трендов
+    "macrotracker": {
+        "core_lookup", "macro", "fx_metals", "fixed_income",
+    },
+    # Риск-менеджер: контроль рисков позиций и портфеля
+    "risk_manager": {
+        "core_lookup", "risk", "screening", "macro", "technical", "fixed_income", "derivatives",
+    },
+    # Специалист по инструментам: ETF, производные
+    "instrument_specialist": {
+        "core_lookup", "etf", "derivatives", "technical", "price_history",
+    },
+    # Портфельный менеджер: обслуживание и мониторинг портфеля
+    "portfolio_manager": {
+        "core_lookup", "risk", "screening", "fundamental", "macro", "fixed_income",
+    },
+}
 
-# Registered tool functions for role-based server creation
-_ROLE_FN: dict[str, list[Callable]] = {role: [] for role in ROLES}
+# Обратный индекс: tool_name → group (каждый инструмент ровно в одной группе)
+_TOOL_GROUP: dict[str, str] = {}
+for _g, _names in GROUPS.items():
+    for _n in _names:
+        _TOOL_GROUP[_n] = _g
 
 
-def _assign_tool_roles(mcp_instance: FastMCP) -> None:
-    """Tag every registered tool with role metadata based on ROLES."""
+def _assign_tool_groups(mcp_instance: FastMCP) -> None:
+    """Tag every registered tool with group metadata."""
     for tool in mcp_instance._tool_manager._tools.values():
-        role = _TOOL_ROLE.get(tool.name, "generic")
+        group = _TOOL_GROUP.get(tool.name)
         if tool.meta is None:
             tool.meta = {}
-        tool.meta["role"] = role
+        tool.meta["group"] = group
+
+
+def _tools_for_groups(groups: set[str], source: FastMCP) -> dict[str, object]:
+    """Return tools from *source* matching any of the given *groups*."""
+    allowed: set[str] = set()
+    for g in groups:
+        allowed |= GROUPS.get(g, set())
+    return {
+        t.name: t for t in source._tool_manager._tools.values()
+        if t.name in allowed
+    }
+
+
+def _create_group_server(group: str, source: FastMCP) -> FastMCP:
+    """Create a FastMCP instance for a single tool group."""
+    g_mcp = FastMCP(
+        name=f"ru-finance-{group}",
+        icons=_load_icons(),
+        host=source.settings.host,
+        port=source.settings.port,
+        streamable_http_path="/mcp",
+        stateless_http=source.settings.stateless_http,
+        event_store=InMemoryEventStore(),
+        retry_interval=5,
+        transport_security=source.settings.transport_security,
+        warn_on_duplicate_tools=False,
+    )
+    g_mcp._tool_manager._tools = _tools_for_groups({group}, source)
+    return g_mcp
 
 
 def _create_role_server(role: str, source: FastMCP) -> FastMCP:
-    """Create a FastMCP instance containing only tools for *role*.
-
-    Generic tools are included in every role server.
-    """
-    role_mcp = FastMCP(
+    """Create a FastMCP instance for a composed role (union of its groups)."""
+    r_mcp = FastMCP(
         name=f"ru-finance-{role}",
         icons=_load_icons(),
         host=source.settings.host,
@@ -107,11 +197,8 @@ def _create_role_server(role: str, source: FastMCP) -> FastMCP:
         transport_security=source.settings.transport_security,
         warn_on_duplicate_tools=False,
     )
-    allowed = ROLES.get(role, set()) | ROLES["generic"]
-    for tool in source._tool_manager._tools.values():
-        if tool.name in allowed:
-            role_mcp._tool_manager._tools[tool.name] = tool
-    return role_mcp
+    r_mcp._tool_manager._tools = _tools_for_groups(ROLES[role], source)
+    return r_mcp
 
 
 class InMemoryEventStore(EventStore):
@@ -1841,54 +1928,56 @@ if __name__ == "__main__":
         from starlette.applications import Starlette
         from starlette.routing import Mount
 
-        _assign_tool_roles(mcp)
+        _assign_tool_groups(mcp)
 
-        # ── Build session managers ──
-        _all_mgr = StreamableHTTPSessionManager(
-            app=mcp._mcp_server,
-            event_store=mcp._event_store,
-            retry_interval=5,
-            stateless=mcp.settings.stateless_http,
-            security_settings=mcp.settings.transport_security,
-        )
-
-        _role_mgrs: dict[str, tuple[FastMCP, StreamableHTTPSessionManager]] = {}
-        for _role in ROLES:
-            _rmcp = _create_role_server(_role, mcp)
-            _role_mgrs[_role] = (_rmcp, StreamableHTTPSessionManager(
-                app=_rmcp._mcp_server,
-                event_store=_rmcp._event_store,
+        def _make_session_mgr(m: FastMCP) -> StreamableHTTPSessionManager:
+            return StreamableHTTPSessionManager(
+                app=m._mcp_server,
+                event_store=m._event_store,
                 retry_interval=5,
-                stateless=_rmcp.settings.stateless_http,
-                security_settings=_rmcp.settings.transport_security,
-            ))
+                stateless=m.settings.stateless_http,
+                security_settings=m.settings.transport_security,
+            )
 
-        # ASGI handlers (invoke after session_manager.run() has been entered)
-        async def _all_asgi(scope, receive, send):
-            await _all_mgr.handle_request(scope, receive, send)
+        def _make_handler(mgr: StreamableHTTPSessionManager):
+            async def _handler(scope, receive, send):
+                await mgr.handle_request(scope, receive, send)
+            return _handler
 
-        _role_asgi: dict[str, object] = {}
-        for _role, (_rmcp, _mgr) in _role_mgrs.items():
-            # Closure to capture _mgr
-            def _make_handler(m):
-                async def _handler(scope, receive, send):
-                    await m.handle_request(scope, receive, send)
-                return _handler
-            _role_asgi[_role] = _make_handler(_mgr)
+        # ── /mcp — all tools ──
+        _all_mgr = _make_session_mgr(mcp)
+
+        # ── /g/{group}/mcp — individual tool groups ──
+        _group_mgrs: dict[str, StreamableHTTPSessionManager] = {}
+        for _g in GROUPS:
+            _gmcp = _create_group_server(_g, mcp)
+            _group_mgrs[_g] = _make_session_mgr(_gmcp)
+
+        # ── /{role}/mcp — composed role endpoints ──
+        _role_mgrs: dict[str, StreamableHTTPSessionManager] = {}
+        for _r in ROLES:
+            _rmcp = _create_role_server(_r, mcp)
+            _role_mgrs[_r] = _make_session_mgr(_rmcp)
 
         @contextlib.asynccontextmanager
         async def _lifespan(app) -> AsyncIterator[None]:
             async with contextlib.AsyncExitStack() as stack:
                 await stack.enter_async_context(_all_mgr.run())
-                for _, (_, mgr) in _role_mgrs.items():
+                for mgr in _group_mgrs.values():
+                    await stack.enter_async_context(mgr.run())
+                for mgr in _role_mgrs.values():
                     await stack.enter_async_context(mgr.run())
                 yield
 
-        routes: list[Mount] = [
-            Mount(f"/{role}", app=handler)
-            for role, handler in _role_asgi.items()
+        routes: list[Mount] = [Mount("/", app=_make_handler(_all_mgr))]
+        routes += [
+            Mount(f"/g/{group}", app=_make_handler(mgr))
+            for group, mgr in _group_mgrs.items()
         ]
-        routes.append(Mount("/", app=_all_asgi))
+        routes += [
+            Mount(f"/{role}", app=_make_handler(mgr))
+            for role, mgr in _role_mgrs.items()
+        ]
 
         app = Starlette(lifespan=_lifespan, routes=routes)
 

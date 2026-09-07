@@ -82,25 +82,49 @@
    при больших сдвигах) и с тем контекстом/целями пользователя, что есть у тебя на
    стороне клиента.
 
-## Роли агентов (tool groups)
+## Группы и роли (tool groups & roles)
 
-76 инструментов сервера разбиты на **роли**. В HTTP-режиме каждая роль доступна
-по отдельному URL, чтобы агент получал только нужные инструменты (меньше контекста):
+76 инструментов разбиты на **13 групп** (без дубликатов). **Роль** = набор
+групп, подключаемых агенту. В HTTP-режиме доступны три уровня:
 
-| Роль | URL | Инструментов | Описание |
-|------|-----|-------------|----------|
-| **all** | `/mcp` | 76 | Все инструменты (как раньше) |
-| **market** | `/market/mcp` | 31 | Котировки, история, волатильность, ликвидность, тех. анализ, дивиденды, ETF/БПИФ, фундаментал |
-| **bond** | `/bond/mcp` | 16 | Облигации, скринер, кредитные рейтинги, ЗПИФ |
-| **macro** | `/macro/mcp` | 10 | Ставки ЦБ, инфляция, кривая доходности |
-| **portfolio** | `/portfolio/mcp` | 4 | Снимок портфеля, сценарии, календарь дохода |
-| **derivatives** | `/derivatives/mcp` | 10 | Фьючерсы, опционы, basis |
+| Тип | URL | Пример |
+|-----|-----|--------|
+| Все | `/mcp` | все инструменты |
+| Группа | `/g/{group}/mcp` | `/g/screening/mcp`, `/g/fixed_income/mcp` |
+| Роль | `/{role}/mcp` | `/screener/mcp`, `/analyst/mcp` |
 
-**Generic-инструменты** (`current_datetime`, `moex_resolve`, `moex_search`,
-`moex_quote`, `moex_bond`) входят во **все** роли — базовый lookup всегда
-доступен.
+### Группы инструментов
 
-Stdio-режим отдаёт все 76 инструментов (роли не разделены).
+| Группа | Инстр. | Состав |
+|--------|-------:|--------|
+| core_lookup | 5 | `current_datetime`, `moex_resolve`, `moex_search`, `moex_quote`, `moex_bond` |
+| price_history | 4 | `moex_candles`, `moex_history`, `moex_full_history`, `moex_aggregates` |
+| market_data | 2 | `moex_turnovers`, `moex_indicative_rates` |
+| fundamental | 17 | `moex_company_info`, `moex_company_info_by_id`, `moex_market_capitalization`, `moex_ir_calendar`, `moex_sitenews`, `smartlab_dividends`, `smartlab_dividend_history`, `smartlab_company_financials`, `smartlab_company_financials_multi`, `stock_f_score`, `stock_z_score`, `stock_peer_comparison`, `stock_growth_analysis`, `dividend_analysis`, `bank_benchmark`, `bank_peer_comparison`, `company_fundamental_report` |
+| technical | 4 | `price_volatility`, `liquidity_assessment`, `technical_indicators`, `moex_splits` |
+| screening | 5 | `smartlab_stock_screener`, `bond_screener`, `etf_screener`, `raexpert_emitent_ratings`, `moex_correlations` |
+| discover | 2 | `moex_search_endpoints`, `moex_query` |
+| macro | 7 | `cbr_key_rate`, `cbr_inflation`, `cbr_ruonia`, `cbr_ruonia_index`, `cbr_ibor`, `rate_expectations`, `curve_yield` |
+| fx_metals | 3 | `cbr_currency`, `cbr_metals`, `cbr_reserves` |
+| fixed_income | 10 | `moex_emitent_bonds`, `moex_bond_coupons`, `moex_bond_market_aggregates`, `moex_zcyc_history`, `bond_report`, `bond_accrued_interest`, `bond_synthetic_yield`, `raexpert_rating`, `zpif_payments`, `zpif_funds_list` |
+| etf | 3 | `etf_fund_info`, `etf_premium_discount`, `etf_tracking_error` |
+| derivatives | 10 | `moex_futures_list`, `moex_futures_open_interest`, `moex_futures_series`, `moex_futures_promo`, `moex_futures_basis`, `moex_options_assets`, `moex_options_board`, `moex_option_quote`, `moex_option_orderbook`, `moex_option_history` |
+| risk | 4 | `portfolio_snapshot`, `portfolio_rate_whatif`, `portfolio_income_calendar`, `portfolio_movers` |
+
+### Роли агентов (наборы групп)
+
+| Роль | URL | Задача | Группы |
+|------|-----|--------|--------|
+| **screener** | `/screener/mcp` | Обнаружить кандидатов из широкой вселенной | core_lookup, discover, screening, fundamental, macro |
+| **analyst** | `/analyst/mcp` | Глубокий анализ конкретного инструмента | core_lookup, price_history, fundamental, technical, fixed_income, etf |
+| **constructor** | `/constructor/mcp` | Собрать оптимальный портфель | core_lookup, screening, risk, fixed_income, etf |
+| **timer** | `/timer/mcp` | Определить точку входа/выхода | core_lookup, price_history, technical, derivatives |
+| **macrotracker** | `/macrotracker/mcp` | Мониторинг макроэкономических трендов | core_lookup, macro, fx_metals, fixed_income |
+| **risk_manager** | `/risk_manager/mcp` | Контроль рисков портфеля и позиций | core_lookup, risk, screening, macro, technical, fixed_income, derivatives |
+| **instrument_specialist** | `/instrument_specialist/mcp` | ETF/БПИФ, производные | core_lookup, etf, derivatives, technical, price_history |
+| **portfolio_manager** | `/portfolio_manager/mcp` | Обслуживание портфеля | core_lookup, risk, screening, fundamental, macro, fixed_income |
+
+Stdio-режим отдаёт все 76 инструментов (группы и роли не разделены).
 
 ## Работа с репозиторием
 
