@@ -402,8 +402,8 @@ def moex_bond_coupons(query: str) -> list[dict]:
 def moex_candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
     """OHLCV candles for a period.
 
-    Args: query (required, non-empty); interval: 1,10,60(hour),24(day),
-    7(week),31(month),4(quarter); empty=auto-select (≤50 candles).
+    Args: query (required, non-empty); interval: 1,10,60(hour/час),24(day/день),
+    7(week/неделя),31(month/мес),4(quarter/кв); empty=auto-select (≤50 candles).
     frm/till ('YYYY-MM-DD').
     Returns [{begin, open, high, low, close, value, volume}].
     """

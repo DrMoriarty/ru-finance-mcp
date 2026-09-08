@@ -453,7 +453,15 @@ _CANDLE_INTERVALS = [
     ("4",  91),   # квартал
 ]
 
-_VALID_INTERVALS = {"", "1", "10", "60", "24", "7", "31", "4"}
+_INTERVAL_ALIASES = {
+    "1": "1", "min": "1", "minute": "1", "мин": "1", "минута": "1",
+    "10": "10", "10min": "10", "10мин": "10",
+    "60": "60", "hour": "60", "h": "60", "час": "60",
+    "24": "24", "day": "24", "d": "24", "д": "24", "день": "24",
+    "7": "7", "week": "7", "w": "7", "нед": "7", "неделя": "7",
+    "31": "31", "month": "31", "m": "31", "мес": "31", "месяц": "31",
+    "4": "4", "quarter": "4", "q": "4", "кв": "4", "квартал": "4",
+}
 
 
 def _auto_interval(frm: str, till: str) -> str:
@@ -473,11 +481,12 @@ def candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
     """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
 
     Пустой query — ошибка. Пустой или некорректный interval — авто-выбор (≤50 свечей).
+    Принимает альтернативные наименования: day/день, week/неделя, month/мес, quarter/кв, hour/час.
     """
     if not query or not query.strip():
         raise ValueError("moex_candles: query не может быть пустым")
-    if interval not in _VALID_INTERVALS:
-        interval = ""
+    if interval:
+        interval = _INTERVAL_ALIASES.get(interval.lower().strip(), "")
     if not interval:
         interval = _auto_interval(frm, till)
     r = resolve(query)
