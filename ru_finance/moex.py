@@ -4255,6 +4255,220 @@ def options_board(asset: str) -> dict:
     return {"calls": [], "puts": []}
 
 
+# ───────────────────── Cointegration scan / matrix ──────────────────────
+
+
+def _fetch_candles(secid: str, engine: str, market: str, board: str,
+                   frm, till) -> dict[str, float]:
+    """Дневные close-цены для одного тикера. Возвращает {дата: цена}."""
+    raw = exec_template(T_CANDLES, {
+        "engine": engine, "market": market,
+        "board": board, "security": secid},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows = records(raw, "candles")
+    out: dict[str, float] = {}
+    for row in rows:
+        d = (row.get("begin") or "")[:10]
+        c = row.get("close")
+        if d and c:
+            out[d] = float(c)
+    return out
+
+
+def _fetch_all_candles(tickers: list[str], days: int):
+    """Резолв + параллельная загрузка свечей для списка тикеров.
+
+    Возвращает: (candles: {secid: {date: price}}, resolved: {query: resolve_dict}).
+    """
+    from datetime import date, timedelta
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    till = date.today()
+    frm = till - timedelta(days=days + 10)
+
+    resolved: dict[str, dict] = {}
+    for t in tickers:
+        try:
+            resolved[t] = resolve(t)
+        except Exception:
+            pass
+
+    candles: dict[str, dict[str, float]] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {}
+        for t, r in resolved.items():
+            fut = ex.submit(_fetch_candles, r["secid"], r["engine"],
+                            r["market"], r["board"], frm, till)
+            futs[fut] = t
+        for f in as_completed(futs):
+            t = futs[f]
+            try:
+                data = f.result()
+                if data:
+                    candles[resolved[t]["secid"]] = data
+            except Exception:
+                pass
+
+    return candles, resolved
+
+
+def _pair_compact(y, x, method: str) -> dict:
+    """Компактный результат коинтеграции для одной пары."""
+    import numpy as np
+    entry: dict = {}
+    sort_key = 0.0
+
+    if method in ("engle_granger", "both"):
+        eg = _engle_granger_test(y, x)
+        entry["engle_granger"] = {
+            "t_stat": eg["t_stat"],
+            "is_cointegrated_95": eg["is_cointegrated_95"],
+            "hedge_ratio": eg["hedge_ratio"],
+            "half_life_days": eg["half_life_days"],
+        }
+        sort_key = abs(eg["t_stat"])
+
+    if method in ("johansen", "both"):
+        jh = _johansen_test(y, x)
+        entry["johansen"] = {
+            "trace_stat": jh["trace_stat"],
+            "is_cointegrated_95": jh["is_cointegrated_95"],
+            "cointegrating_vector": jh["cointegrating_vector"],
+        }
+        if not sort_key:
+            sort_key = jh["trace_stat"][0]
+
+    entry["_sk"] = sort_key
+    return entry
+
+
+def cointegration_scan(ticker: str, candidates: str | list[str],
+                       days: int = 252, method: str = "both",
+                       min_obs: int = 30) -> dict:
+    """Поиск коинтеграции: один тикер против списка кандидатов.
+
+    Вход: ticker — эталонный тикер.
+          candidates — строка 'SBER,GAZP,LKOH' или список.
+          days — период (по умолчанию 252).
+          method — 'engle_granger', 'johansen', 'both'.
+          min_obs — минимум совпавших дней.
+
+    Возвращает: {ticker, candidates_tested, results: [{ticker, n_obs, engle_granger?, johansen?}]}
+    — отсортировано по убыванию значимости.
+    """
+    import numpy as np
+
+    if isinstance(candidates, str):
+        candidates = [c.strip() for c in candidates.split(",") if c.strip()]
+
+    candidates = [c for c in candidates if c.upper() != ticker.upper()]
+    if not candidates:
+        return {"error": "список кандидатов пуст"}
+
+    all_tickers = [ticker] + candidates
+    candles, resolved = _fetch_all_candles(all_tickers, days)
+
+    r_ref = resolved.get(ticker)
+    if not r_ref:
+        return {"error": f"не удалось резолвить {ticker}"}
+    ref_data = candles.get(r_ref["secid"])
+    if not ref_data:
+        return {"error": f"нет данных для {ticker}"}
+
+    results = []
+    for cand in candidates:
+        r_cand = resolved.get(cand)
+        if not r_cand:
+            continue
+        cand_data = candles.get(r_cand["secid"])
+        if not cand_data:
+            continue
+
+        common = sorted(set(ref_data) & set(cand_data))
+        if len(common) < min_obs:
+            continue
+
+        y = np.array([ref_data[d] for d in common])
+        x = np.array([cand_data[d] for d in common])
+
+        entry = _pair_compact(y, x, method)
+        entry["ticker"] = r_cand["secid"]
+        entry["n_obs"] = len(common)
+        results.append(entry)
+
+    results.sort(key=lambda e: e.pop("_sk", 0), reverse=True)
+
+    return {
+        "ticker": r_ref["secid"],
+        "candidates_tested": len(results),
+        "results": results,
+    }
+
+
+def cointegration_matrix(tickers: str | list[str], days: int = 252,
+                         method: str = "both", min_obs: int = 30) -> dict:
+    """Попарная коинтеграция для списка тикеров.
+
+    Вход: ticks — строка 'SBER,GAZP,LKOH' или список.
+          days — период (по умолчанию 252).
+          method — 'engle_granger', 'johansen', 'both'.
+          min_obs — минимум совпавших дней.
+
+    Возвращает: {n_tickers, pairs_tested, results: [{ticker1, ticker2, n_obs, engle_granger?, johansen?}]}
+    — отсортировано по убыванию значимости.
+    """
+    import numpy as np
+    from itertools import combinations
+
+    if isinstance(tickers, str):
+        tickers = [t.strip() for t in tickers.split(",") if t.strip()]
+
+    if len(tickers) < 2:
+        return {"error": "нужно минимум 2 тикера"}
+
+    candles, resolved = _fetch_all_candles(tickers, days)
+
+    secid_map = {}
+    for t in tickers:
+        r = resolved.get(t)
+        if r and r["secid"] in candles:
+            secid_map[t] = r["secid"]
+
+    results = []
+    for t1, t2 in combinations(tickers, 2):
+        s1 = secid_map.get(t1)
+        s2 = secid_map.get(t2)
+        if not s1 or not s2:
+            continue
+
+        d1 = candles.get(s1)
+        d2 = candles.get(s2)
+        if not d1 or not d2:
+            continue
+
+        common = sorted(set(d1) & set(d2))
+        if len(common) < min_obs:
+            continue
+
+        y = np.array([d1[d] for d in common])
+        x = np.array([d2[d] for d in common])
+
+        entry = _pair_compact(y, x, method)
+        entry["ticker1"] = s1
+        entry["ticker2"] = s2
+        entry["n_obs"] = len(common)
+        results.append(entry)
+
+    results.sort(key=lambda e: e.pop("_sk", 0), reverse=True)
+
+    return {
+        "n_tickers": len(secid_map),
+        "pairs_tested": len(results),
+        "results": results,
+    }
+    return {"calls": [], "puts": []}
+
+
 def option_quote(secid: str) -> dict:
     """Котировка опционного инструмента (рыночные данные + спецификация).
 

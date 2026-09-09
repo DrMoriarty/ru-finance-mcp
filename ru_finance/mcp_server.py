@@ -61,6 +61,7 @@ GROUPS: dict[str, set[str]] = {
     "screening": {
         "smartlab_stock_screener", "bond_screener", "bond_prescreener", "etf_screener",
         "raexpert_emitent_ratings", "moex_correlations",
+        "cointegration_scan", "cointegration_matrix",
     },
     # Обнаружение ISS-эндпоинтов
     "discover": {
@@ -504,6 +505,49 @@ def moex_correlations(secid: str) -> list[dict]:
     Returns [{secid, fxsecid, tradedate, coeff_correlation, coeff_beta}].
     """
     return moex.correlations(secid)
+
+
+@_tool()
+async def cointegration_scan(
+    ticker: str, candidates: str, ctx: Context,
+    days: int = 252, method: str = "both",
+) -> dict:
+    """Find cointegration matches for a ticker against a list of candidates.
+
+    Data is fetched once per ticker and reused for all comparisons.
+
+    Args:
+        ticker — reference ticker (e.g. 'SBER').
+        candidates — comma-separated tickers (e.g. 'GAZP,LKOH,MOEX').
+        days — history period (default 252 ≈ 1 year).
+        method — 'engle_granger', 'johansen' or 'both' (default).
+    Returns:
+        {ticker, candidates_tested, results: [{ticker, n_obs, engle_granger?, johansen?}]}
+        sorted by significance.
+    """
+    await ctx.report_progress(0, 2, "Fetching price data")
+    return moex.cointegration_scan(ticker, candidates, days, method)
+
+
+@_tool()
+async def cointegration_matrix(
+    tickers: str, ctx: Context,
+    days: int = 252, method: str = "both",
+) -> dict:
+    """Pairwise cointegration test for a list of tickers.
+
+    Data is fetched once per ticker and reused for all pairs.
+
+    Args:
+        tickers — comma-separated tickers (e.g. 'SBER,GAZP,LKOH,MOEX').
+        days — history period (default 252 ≈ 1 year).
+        method — 'engle_granger', 'johansen' or 'both' (default).
+    Returns:
+        {n_tickers, pairs_tested, results: [{ticker1, ticker2, n_obs, engle_granger?, johansen?}]}
+        sorted by significance.
+    """
+    await ctx.report_progress(0, 2, "Fetching price data")
+    return moex.cointegration_matrix(tickers, days, method)
 
 
 @_tool()
