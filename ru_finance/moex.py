@@ -4252,9 +4252,7 @@ def options_board(asset: str) -> dict:
         result = _build_optionboard(raw)
         if result["calls"] or result["puts"]:
             return result
-
-    # Намеренно возвращаем пустой результат — не падаем
-    return {"asset_info": {}, "calls": [], "puts": []}
+    return {"calls": [], "puts": []}
 
 
 def option_quote(secid: str) -> dict:
@@ -4375,4 +4373,203 @@ def option_history(secid: str, frm: str | None = None, till: str | None = None) 
             "change": r.get("CHANGE"),
             "qty": r.get("QTY"),
         })
+    return result
+
+
+# ───────────────────────── Cointegration tests ──────────────────────────
+
+
+def _engle_granger_test(y, x):
+    """Engle-Granger two-step cointegration test.
+
+    Step 1: OLS y = α + βx + ε
+    Step 2: ADF test on residuals (1 lag)
+    """
+    import numpy as np
+
+    n = len(y)
+
+    X = np.column_stack([np.ones(n), x])
+    coeffs = np.linalg.lstsq(X, y, rcond=None)[0]
+    alpha, beta = coeffs
+    residuals = y - X @ coeffs
+
+    eps = residuals
+    dep = np.diff(eps)
+    lag_level = eps[:-1]
+    lag_diff = dep[:-1]
+
+    X_adf = np.column_stack([lag_level[1:], lag_diff])
+    y_adf = dep[1:]
+    n_adf = len(y_adf)
+
+    b = np.linalg.lstsq(X_adf, y_adf, rcond=None)[0]
+    gamma = b[0]
+
+    resid = y_adf - X_adf @ b
+    s2 = np.sum(resid ** 2) / (n_adf - len(b))
+    se = np.sqrt(s2 * np.linalg.inv(X_adf.T @ X_adf)[0, 0])
+    t_stat = gamma / se
+
+    half_life = -np.log(2) / np.log(1 + gamma) if -2 < gamma < 0 and (1 + gamma) > 0 else None
+
+    return {
+        "t_stat": round(float(t_stat), 4),
+        "gamma": round(float(gamma), 6),
+        "critical_values": {"1%": -3.9001, "5%": -3.3377, "10%": -3.0462},
+        "is_cointegrated_95": bool(t_stat < -3.3377),
+        "hedge_ratio": round(float(beta), 6),
+        "intercept": round(float(alpha), 6),
+        "half_life_days": round(float(half_life), 1) if half_life is not None else None,
+        "residual_std": round(float(np.std(resid)), 6),
+        "n_obs": n_adf,
+    }
+
+
+def _johansen_test(y, x, p=1):
+    """Johansen cointegration test (Case 2: intercept in CE, no trend).
+
+    Args: y, x — aligned price series; p — VAR lag order (default 1).
+    """
+    import numpy as np
+
+    Y = np.column_stack([y, x])
+    T_total, k = Y.shape
+    T = T_total - p
+
+    dY = np.diff(Y, axis=0)[p - 1:]
+    Y_lag = Y[p - 1:-1]
+
+    dY_dm = dY - dY.mean(axis=0)
+    Y_lag_dm = Y_lag - Y_lag.mean(axis=0)
+
+    S00 = dY_dm.T @ dY_dm / T
+    S11 = Y_lag_dm.T @ Y_lag_dm / T
+    S01 = dY_dm.T @ Y_lag_dm / T
+    S10 = S01.T
+
+    M = np.linalg.inv(S11) @ S10 @ np.linalg.inv(S00) @ S01
+
+    eigvals, eigvecs = np.linalg.eig(M)
+    eigvals = np.real(eigvals)
+    eigvecs = np.real(eigvecs)
+
+    idx = np.argsort(eigvals)[::-1]
+    eigvals = eigvals[idx]
+    eigvecs = eigvecs[:, idx]
+    eigvals = np.clip(eigvals, 0, 0.9999)
+
+    trace_stats = []
+    max_eig_stats = []
+    for r in range(k):
+        trace = -T * np.sum(np.log(1 - eigvals[r:]))
+        max_eig = -T * np.log(1 - eigvals[r])
+        trace_stats.append(round(float(trace), 4))
+        max_eig_stats.append(round(float(max_eig), 4))
+
+    beta_vec = eigvecs[:, 0]
+    if abs(beta_vec[0]) > 1e-10:
+        beta_vec = beta_vec / beta_vec[0]
+
+    # Osterwald-Lenum 1992, Case 2, n=2
+    trace_cv = {
+        "r=0": {"90%": 10.49, "95%": 12.25, "99%": 16.26},
+        "r<=1": {"90%": 2.98, "95%": 4.14, "99%": 6.81},
+    }
+    max_eig_cv = {
+        "r=0": {"90%": 9.01, "95%": 11.04, "99%": 14.07},
+        "r<=1": {"90%": 2.98, "95%": 4.14, "99%": 6.81},
+    }
+
+    rank_95 = 0
+    for r in range(k):
+        key = "r=0" if r == 0 else f"r<={r}"
+        if trace_stats[r] > trace_cv[key]["95%"]:
+            rank_95 = r + 1
+        else:
+            break
+
+    return {
+        "eigenvalues": [round(float(e), 6) for e in eigvals],
+        "trace_stat": trace_stats,
+        "max_eigenvalue_stat": max_eig_stats,
+        "trace_critical": trace_cv,
+        "max_eigenvalue_critical": max_eig_cv,
+        "cointegrating_vector": [round(float(v), 6) for v in beta_vec],
+        "cointegrating_rank_95": rank_95,
+        "is_cointegrated_95": rank_95 > 0,
+        "n_obs": T,
+    }
+
+
+def cointegration(ticker1: str, ticker2: str, days: int = 252,
+                  method: str = "both") -> dict:
+    """Тест коинтеграции между двумя активами (Engle-Granger и/или Johansen).
+
+    Вход: ticker1, ticker2 — тикеры MOEX (напр. 'SBER', 'GAZP').
+          days — период истории (по умолчанию 252 ≈ 1 год).
+          method — 'engle_granger', 'johansen' или 'both'.
+
+    Возвращает: {ticker1, ticker2, n_obs, period,
+                 engle_granger: {t_stat, critical_values, hedge_ratio, half_life_days, ...},
+                 johansen: {trace_stat, max_eigenvalue_stat, cointegrating_vector, ...}}.
+    """
+    import numpy as np
+    from datetime import date, timedelta
+
+    till = date.today()
+    frm = till - timedelta(days=days + 10)
+
+    r1 = resolve(ticker1)
+    raw1 = exec_template(T_CANDLES, {
+        "engine": r1["engine"], "market": r1["market"],
+        "board": r1["board"], "security": r1["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows1 = records(raw1, "candles")
+
+    r2 = resolve(ticker2)
+    raw2 = exec_template(T_CANDLES, {
+        "engine": r2["engine"], "market": r2["market"],
+        "board": r2["board"], "security": r2["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows2 = records(raw2, "candles")
+
+    map1 = {}
+    for row in rows1:
+        d = (row.get("begin") or "")[:10]
+        c = row.get("close")
+        if d and c:
+            map1[d] = float(c)
+
+    map2 = {}
+    for row in rows2:
+        d = (row.get("begin") or "")[:10]
+        c = row.get("close")
+        if d and c:
+            map2[d] = float(c)
+
+    common_dates = sorted(set(map1.keys()) & set(map2.keys()))
+    n = len(common_dates)
+    if n < 30:
+        return {
+            "error": f"недостаточно данных: {n} совпавших дней (мин. 30)",
+            "ticker1": r1["secid"], "ticker2": r2["secid"],
+        }
+
+    y = np.array([map1[d] for d in common_dates])
+    x = np.array([map2[d] for d in common_dates])
+
+    result = {
+        "ticker1": r1["secid"],
+        "ticker2": r2["secid"],
+        "n_obs": n,
+        "period": {"from": common_dates[0], "to": common_dates[-1]},
+    }
+
+    if method in ("engle_granger", "both"):
+        result["engle_granger"] = _engle_granger_test(y, x)
+
+    if method in ("johansen", "both"):
+        result["johansen"] = _johansen_test(y, x)
+
     return result

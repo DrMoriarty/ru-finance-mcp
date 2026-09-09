@@ -55,7 +55,7 @@ GROUPS: dict[str, set[str]] = {
     },
     # Индикаторы, волатильность, сплиты
     "technical": {
-        "price_volatility", "liquidity_assessment", "technical_indicators", "moex_splits", "candlestick_patterns",
+        "price_volatility", "liquidity_assessment", "technical_indicators", "moex_splits", "candlestick_patterns", "cointegration_test",
     },
     # Скринеры, ранжирование, сравнительный анализ
     "screening": {
@@ -1392,6 +1392,26 @@ async def price_volatility(query: str, ctx: Context, days: int = 90, rf_annual: 
     """
     await ctx.report_progress(0, 2, "Fetching candle data")
     return moex.price_volatility(query, days, rf_annual)
+
+
+@_tool()
+async def cointegration_test(
+    ticker1: str, ticker2: str, ctx: Context,
+    days: int = 252, method: str = "both",
+) -> dict:
+    """Cointegration test between two MOEX securities.
+
+    Args:
+        ticker1, ticker2 — tickers (e.g. 'SBER', 'GAZP').
+        days — history period (default 252 ≈ 1 year).
+        method — 'engle_granger', 'johansen' or 'both' (default).
+    Returns:
+        {ticker1, ticker2, n_obs, period,
+         engle_granger: {t_stat, critical_values, hedge_ratio, half_life_days, ...},
+         johansen: {trace_stat, max_eigenvalue_stat, cointegrating_vector, ...}}.
+    """
+    await ctx.report_progress(0, 2, "Fetching price data")
+    return moex.cointegration(ticker1, ticker2, days, method)
 
 
 @_tool()
