@@ -73,6 +73,12 @@
    Bollinger Bands(20,2), ATR(14), OBV, VWAP, CCI(20), Williams %R(14),
    Ichimoku(9,26,52), Parabolic SAR, Pivot Points, Fibonacci, Momentum/ROC(10),
    Chaikin Money Flow(20), EMA(12/26), SMA(50/200), MA golden/death cross.
+6. **Свечной анализ:** `candlestick_patterns(<тикер>, days)` — 14 классических
+   паттернов: doji (4 варианта: standard, dragonfly, gravestone, long_legged),
+   hammer/hanging_man, shooting_star, bullish/bearish_marubozu, engulfing,
+   harami, piercing_line, dark_cloud_cover, tweezer_top/bottom, morning/evening_star,
+   three_white_soldiers, three_black_crows. Каждый паттерн: signal, strength (1-3),
+   bars_back, позиция в периоде (high/low context). Сводный signal.
 6. **ETF/БПИФ:** `etf_fund_info(<тикер>)` — тип фонда, бенчмарк, iNAV, премия/дисконт;
    `etf_tracking_error(<тикер>, days)` — трекинг-ошибка к индексу;
    `etf_screener(...)` — скринер фондов: фильтрация по классу активов, эмитенту,
@@ -84,7 +90,7 @@
 
 ## Группы и роли (tool groups & roles)
 
-76 инструментов разбиты на **13 групп** (без дубликатов). **Роль** = набор
+78 инструментов разбиты на **13 групп** (без дубликатов). **Роль** = набор
 групп, подключаемых агенту. В HTTP-режиме доступны три уровня:
 
 | Тип | URL | Пример |
@@ -101,8 +107,8 @@
 | price_history | 4 | `moex_candles`, `moex_history`, `moex_full_history`, `moex_aggregates` |
 | market_data | 2 | `moex_turnovers`, `moex_indicative_rates` |
 | fundamental | 17 | `moex_company_info`, `moex_company_info_by_id`, `moex_market_capitalization`, `moex_ir_calendar`, `moex_sitenews`, `smartlab_dividends`, `smartlab_dividend_history`, `smartlab_company_financials`, `smartlab_company_financials_multi`, `stock_f_score`, `stock_z_score`, `stock_peer_comparison`, `stock_growth_analysis`, `dividend_analysis`, `bank_benchmark`, `bank_peer_comparison`, `company_fundamental_report` |
-| technical | 4 | `price_volatility`, `liquidity_assessment`, `technical_indicators`, `moex_splits` |
-| screening | 5 | `smartlab_stock_screener`, `bond_screener`, `etf_screener`, `raexpert_emitent_ratings`, `moex_correlations` |
+| technical | 5 | `price_volatility`, `liquidity_assessment`, `technical_indicators`, `candlestick_patterns`, `moex_splits` |
+| screening | 6 | `smartlab_stock_screener`, `bond_screener`, `bond_prescreener`, `etf_screener`, `raexpert_emitent_ratings`, `moex_correlations` |
 | discover | 2 | `moex_search_endpoints`, `moex_query` |
 | macro | 7 | `cbr_key_rate`, `cbr_inflation`, `cbr_ruonia`, `cbr_ruonia_index`, `cbr_ibor`, `rate_expectations`, `curve_yield` |
 | fx_metals | 3 | `cbr_currency`, `cbr_metals`, `cbr_reserves` |
@@ -124,7 +130,7 @@
 | **instrument_specialist** | `/instrument_specialist/mcp` | ETF/БПИФ, производные | core_lookup, etf, derivatives, technical, price_history |
 | **portfolio_manager** | `/portfolio_manager/mcp` | Обслуживание портфеля | core_lookup, risk, screening, fundamental, macro, fixed_income |
 
-Stdio-режим отдаёт все 76 инструментов (группы и роли не разделены).
+Stdio-режим отдаёт все 78 инструментов (группы и роли не разделены).
 
 ## Работа с репозиторием
 
@@ -153,7 +159,7 @@ Stdio-режим отдаёт все 76 инструментов (группы �
   smart-lab.ru), `vsezpif.py` (календарь выплат ЗПИФ недвижимости с vsezpif.ru),
   `raexpert.py` (кредитные рейтинги Эксперт РА: эмитенты + облигации,
   скрейпинг raexpert.ru).
-  Наружу всё пробрасывается как инструменты в `mcp_server.py` (76 `@mcp.tool()`).
+  Наружу всё пробрасывается как инструменты в `mcp_server.py` (78 `@mcp.tool()`).
 
 ## Streaming и progress notifications
 

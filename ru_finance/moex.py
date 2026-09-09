@@ -2777,6 +2777,350 @@ def technical_indicators(query: str, days: int = 90) -> dict:
     return result
 
 
+def candlestick_analysis(query: str, days: int = 90) -> dict:
+    """Распознавание свечных паттернов из дневных свечей (OHLCV).
+
+    Args:
+        query — тикер или ISIN.
+        days — период для анализа (default 90).
+
+    Returns:
+        {secid, period_days, trading_days, candles_analyzed,
+         total_bullish, total_bearish, total_neutral, signal,
+         patterns: [{pattern, bar_type, signal, strength, bars_back,
+                     date, signal_detail, pattern_details}]}.
+    """
+    from datetime import date as _date, timedelta
+
+    r = resolve(query)
+    till = _date.today()
+    frm = till - timedelta(days=days + 30)
+
+    raw_candles = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": "24"})
+    rows = records(raw_candles, "candles")
+
+    opens_raw = [row["open"] for row in rows if row.get("open")]
+    highs_raw = [row["high"] for row in rows if row.get("high")]
+    lows_raw = [row["low"] for row in rows if row.get("low")]
+    closes_raw = [row["close"] for row in rows if row.get("close")]
+    volumes_raw = [row["volume"] for row in rows if row.get("volume")]
+    dates_raw = [row.get("begin", "") for row in rows]
+
+    n = len(closes_raw)
+    if n < 3:
+        return {"error": "недостаточно данных", "secid": r["secid"], "trading_days": n}
+
+    result: dict = {
+        "secid": r["secid"],
+        "period_days": days,
+        "trading_days": n,
+        "candles_analyzed": n,
+    }
+
+    # Нормализация свечей
+    candles_all: list[dict] = []
+    for i in range(n):
+        o, h, l, c = opens_raw[i], highs_raw[i], lows_raw[i], closes_raw[i]
+        rng = h - l
+        body = abs(c - o)
+        hi_val = max(o, c)
+        lo_val = min(o, c)
+        candles_all.append({
+            "idx": i, "date": dates_raw[i] if i < len(dates_raw) else "",
+            "open": o, "high": h, "low": l, "close": c,
+            "volume": volumes_raw[i] if i < len(volumes_raw) else None,
+            "body": body, "range": rng,
+            "lower_shadow": lo_val - l, "upper_shadow": h - hi_val,
+            "body_pct": body / rng if rng > 0 else 0.0,
+            "direction": 1 if c > o else -1 if c < o else 0,
+            "midpoint": (o + c) / 2,
+        })
+
+    max_range = max((c["range"] for c in candles_all), default=1)
+    period_high = max(c["high"] for c in candles_all)
+    period_low = min(c["low"] for c in candles_all)
+    period_rng = period_high - period_low or 1.0
+
+    for c in candles_all:
+        c["normalized_range"] = c["range"] / max_range if max_range else 0.0
+        c["period_pct_high"] = (c["high"] - period_low) / period_rng
+        c["period_pct_low"] = (c["low"] - period_low) / period_rng
+
+    # ─── Детектор односвечных паттернов ───
+    def _detect_single_bar(ci: dict, context: float = 0.0) -> dict | None:
+        rng, body_pct, direction = ci["range"], ci["body_pct"], ci["direction"]
+        ls = ci["lower_shadow"]
+        us = ci["upper_shadow"]
+
+        if rng == 0:
+            return None
+
+        strength_raw = 1
+        if ci["normalized_range"] >= 0.3:
+            strength_raw = 2
+
+        # Codji
+        if body_pct <= 0.1:
+            if ls / rng >= 0.3 and us / rng >= 0.3:
+                sub = "long_legged"
+            elif ls / rng >= 0.6 and us / rng <= 0.15:
+                sub = "dragonfly"
+            elif us / rng >= 0.6 and ls / rng <= 0.15:
+                sub = "gravestone"
+            else:
+                sub = "standard"
+            strength = strength_raw
+            if sub in ("dragonfly", "gravestone"):
+                strength = min(strength_raw + 1, 3)
+            return {"pattern": "doji", "sub": sub, "signal": 0, "strength": strength}
+
+        # Hammer / Hanging Man
+        if (ls / max(body_pct * rng, 1e-12) >= 2.0 and
+                ls / rng >= 0.4 and us / rng <= 0.10 and body_pct <= 0.35):
+            strength = min(strength_raw + 1, 3)
+            if context > 0.5:
+                return {"pattern": "hanging_man", "signal": -1, "strength": strength}
+            return {"pattern": "hammer", "signal": 1, "strength": strength}
+
+        # Shooting Star
+        if (us / max(body_pct * rng, 1e-12) >= 2.0 and
+                us / rng >= 0.4 and ls / rng <= 0.10 and body_pct <= 0.35):
+            strength = min(strength_raw + 1, 3)
+            return {"pattern": "shooting_star", "signal": -1, "strength": strength}
+
+        # Marubozu
+        if body_pct >= 0.90:
+            strength = min(strength_raw + 1, 3)
+            if direction == 1:
+                return {"pattern": "bullish_marubozu", "signal": 1, "strength": strength}
+            if direction == -1:
+                return {"pattern": "bearish_marubozu", "signal": -1, "strength": strength}
+
+        return None
+
+    # ─── Детектор двухсвечных и трёхсвечных паттернов ───
+    def _detect_multi_bar(patterns: list, c: list[dict], n_bars: int) -> list:
+        results: list = []
+
+        for k in range(n_bars - 1):
+            idx = n_bars - 1 - k  # текущая свеча (от конца)
+            p, q = c[idx - 1], c[idx]  # предыдущая, текущая
+
+            ca_p = abs(q["body"]) / max(p["body"], 1e-12)
+
+            # Bullish Engulfing
+            if (p["direction"] == -1 and q["direction"] == 1 and
+                    p["close"] >= q["close"] and p["open"] <= q["open"] and
+                    ca_p >= 1.1):
+                strength = 2 if ca_p >= 1.5 else 1
+                if q["period_pct_low"] <= 0.3:
+                    strength = min(strength + 1, 3)
+                results.append({"pattern": "bullish_engulfing", "bar_type": "double",
+                                "signal": "bullish", "strength": strength, "bars_back": k})
+
+            # Bearish Engulfing
+            if (p["direction"] == 1 and q["direction"] == -1 and
+                    p["close"] <= q["close"] and p["open"] >= q["open"] and
+                    ca_p >= 1.1):
+                strength = 2 if ca_p >= 1.5 else 1
+                if q["period_pct_high"] >= 0.7:
+                    strength = min(strength + 1, 3)
+                results.append({"pattern": "bearish_engulfing", "bar_type": "double",
+                                "signal": "bearish", "strength": strength, "bars_back": k})
+
+            # Bullish Harami
+            if (p["direction"] == -1 and q["direction"] == 1 and
+                    q["close"] <= p["open"] and q["open"] >= p["close"] and ca_p <= 0.6):
+                results.append({"pattern": "bullish_harami", "bar_type": "double",
+                                "signal": "bullish", "strength": 1, "bars_back": k})
+
+            # Bearish Harami
+            if (p["direction"] == 1 and q["direction"] == -1 and
+                    q["close"] >= p["open"] and q["open"] <= p["close"] and ca_p <= 0.6):
+                results.append({"pattern": "bearish_harami", "bar_type": "double",
+                                "signal": "bearish", "strength": 1, "bars_back": k})
+
+            # Tweezer Bottom
+            if (p["direction"] <= 0 and q["direction"] == 1 and
+                    abs(p["low"] - q["low"]) / p["low"] < 0.002):
+                strength = 2 if q["period_pct_low"] <= 0.3 else 1
+                results.append({"pattern": "tweezer_bottom", "bar_type": "double",
+                                "signal": "bullish", "strength": strength, "bars_back": k})
+
+            # Tweezer Top
+            if (p["direction"] >= 0 and q["direction"] == -1 and
+                    abs(p["high"] - q["high"]) / p["high"] < 0.002):
+                strength = 2 if q["period_pct_high"] >= 0.7 else 1
+                results.append({"pattern": "tweezer_top", "bar_type": "double",
+                                "signal": "bearish", "strength": strength, "bars_back": k})
+
+        for k in range(n_bars - 2):
+            idx = n_bars - 1 - k
+            a, b, cc = c[idx - 2], c[idx - 1], c[idx]
+            ab_range = a["high"] - a["low"] or 1e-12
+
+            # Morning Star
+            if (a["direction"] == -1 and b["body_pct"] <= 0.30 and cc["direction"] == 1 and b["close"] < a["close"]):
+                gap_below = b["high"] < a["low"]
+                pierce_50 = cc["close"] > (a["open"] + a["close"]) / 2
+                ab_ratio = abs(cc["body"]) / max(abs(a["body"]), 1e-12)
+                strength = 1
+                if gap_below:
+                    strength += 1
+                if pierce_50 and ab_ratio >= 0.5:
+                    strength += 1
+                strength = min(strength, 3)
+                results.append({
+                    "pattern": "morning_star", "bar_type": "triple",
+                    "signal": "bullish", "strength": strength, "bars_back": k,
+                    "pattern_details": {"gap_below_mid": gap_below, "pierce_50pct": pierce_50,
+                                        "body_ratio": round(ab_ratio, 2)},
+                })
+
+            # Evening Star
+            if (a["direction"] == 1 and b["body_pct"] <= 0.30 and cc["direction"] == -1 and b["close"] > a["close"]):
+                gap_above = b["low"] > a["high"]
+                pierce_50 = cc["close"] < (a["open"] + a["close"]) / 2
+                ab_ratio = abs(cc["body"]) / max(abs(a["body"]), 1e-12)
+                strength = 1
+                if gap_above:
+                    strength += 1
+                if pierce_50 and ab_ratio >= 0.5:
+                    strength += 1
+                strength = min(strength, 3)
+                results.append({
+                    "pattern": "evening_star", "bar_type": "triple",
+                    "signal": "bearish", "strength": strength, "bars_back": k,
+                    "pattern_details": {"gap_above_mid": gap_above, "pierce_50pct": pierce_50,
+                                        "body_ratio": round(ab_ratio, 2)},
+                })
+
+            # Bullish Piercing Line
+            if (a["direction"] == -1 and cc["direction"] == 1 and
+                    a["close"] < cc["open"] and cc["close"] > (a["open"] + a["close"]) / 2 and cc["close"] < a["open"]):
+                intrude = (cc["close"] - a["close"]) / max(a["open"] - a["close"], 1e-12)
+                strength = 2 if intrude > 0.6 else 1
+                results.append({
+                    "pattern": "piercing_line", "bar_type": "double",
+                    "signal": "bullish", "strength": strength, "bars_back": k,
+                    "pattern_details": {"intrusion_pct": round(intrude * 100, 1)},
+                })
+
+            # Bearish Dark Cloud Cover
+            if (a["direction"] == 1 and cc["direction"] == -1 and
+                    a["open"] <= cc["close"] and cc["high"] > a["high"] and a["high"] < cc["open"]):
+                intrude = (a["high"] - cc["close"]) / max(a["high"] - a["low"], 1e-12)
+                strength = 2 if intrude > 0.6 else 1
+                results.append({
+                    "pattern": "dark_cloud_cover", "bar_type": "double",
+                    "signal": "bearish", "strength": strength, "bars_back": k,
+                    "pattern_details": {"intrusion_pct": round(intrude * 100, 1)},
+                })
+
+            # Three White Soldiers
+            if (a["direction"] == 1 and b["direction"] == 1 and cc["direction"] == 1 and
+                    b["body"] > 0 and cc["body"] > 0 and
+                    b["open"] > a["low"] and cc["open"] > b["low"] and
+                    b["close"] > a["close"] and cc["close"] > b["close"]):
+                big = (a["body_pct"] > 0.6 and b["body_pct"] > 0.6 and cc["body_pct"] > 0.6)
+                strength = 2 if big else 1
+                if a["period_pct_low"] <= 0.3:
+                    strength = min(strength + 1, 3)
+                results.append({"pattern": "three_white_soldiers", "bar_type": "triple",
+                                "signal": "bullish", "strength": strength, "bars_back": k})
+
+            # Three Black Crows
+            if (a["direction"] == -1 and b["direction"] == -1 and cc["direction"] == -1 and
+                    b["body"] > 0 and cc["body"] > 0 and
+                    b["open"] < a["high"] and cc["open"] < b["high"] and
+                    b["close"] < a["close"] and cc["close"] < b["close"]):
+                big = (a["body_pct"] > 0.6 and b["body_pct"] > 0.6 and cc["body_pct"] > 0.6)
+                strength = 2 if big else 1
+                if a["period_pct_high"] >= 0.7:
+                    strength = min(strength + 1, 3)
+                results.append({"pattern": "three_black_crows", "bar_type": "triple",
+                                "signal": "bearish", "strength": strength, "bars_back": k})
+
+        return results
+
+    # ─── Обнаружение ───
+    patterns_all: list = []
+
+    for ci in candles_all:
+        sp = _detect_single_bar(ci, ci["period_pct_high"])
+        if sp:
+            pat = {
+                "pattern": sp["pattern"],
+                "bar_type": "single",
+                "signal": "bullish" if sp["signal"] > 0 else "bearish" if sp["signal"] < 0 else "neutral",
+                "strength": sp["strength"],
+                "bars_back": n - 1 - ci["idx"],
+                "date": ci["date"],
+                "signal_detail": (
+                    f"{sp['pattern'].replace('_', ' ').title()}: "
+                    f"{'bullish reversal' if sp['signal'] > 0 else 'bearish reversal' if sp['signal'] < 0 else 'neutral / indecision'}"
+                    + (f" ({sp.get('sub', '')})" if sp.get("sub") else "")
+                ),
+            }
+            if ci["volume"] is not None and ci["volume"] > 0:
+                pat["volume"] = ci["volume"]
+            patterns_all.append(pat)
+
+    if n >= 2:
+        mp = _detect_multi_bar(patterns_all, candles_all, n)
+        for mp_item in mp:
+            bi = mp_item.get("bars_back", 0)
+            pat: dict = {
+                "pattern": mp_item["pattern"],
+                "bar_type": mp_item["bar_type"],
+                "signal": mp_item["signal"],
+                "strength": mp_item["strength"],
+                "bars_back": bi,
+                "date": candles_all[n - 1 - bi]["date"] if (n - 1 - bi) >= 0 else "",
+            }
+            if "pattern_details" in mp_item:
+                pat["pattern_details"] = mp_item["pattern_details"]
+            pat["signal_detail"] = (
+                f"{mp_item['pattern'].replace('_', ' ').title()}: "
+                f"{mp_item['signal']} signal"
+            )
+            patterns_all.append(pat)
+
+    # Сортировка: сначала сильные, потом близкие
+    patterns_all.sort(key=lambda x: (-x["strength"], x["bars_back"]))
+
+    total_bull = sum(1 for p in patterns_all if p["signal"] == "bullish")
+    total_bear = sum(1 for p in patterns_all if p["signal"] == "bearish")
+    total_neut = sum(1 for p in patterns_all if p["signal"] == "neutral")
+
+    strong_bull = sum(p["strength"] for p in patterns_all if p["signal"] == "bullish")
+    strong_bear = sum(p["strength"] for p in patterns_all if p["signal"] == "bearish")
+
+    if strong_bull > strong_bear + 2:
+        signal = "bullish"
+    elif strong_bear > strong_bull + 2:
+        signal = "bearish"
+    elif strong_bull > strong_bear:
+        signal = "slightly_bullish"
+    elif strong_bear > strong_bull:
+        signal = "slightly_bearish"
+    else:
+        signal = "neutral"
+
+    result["total_bullish"] = total_bull
+    result["total_bearish"] = total_bear
+    result["total_neutral"] = total_neut
+    result["signal_score_bullish"] = strong_bull
+    result["signal_score_bearish"] = strong_bear
+    result["signal"] = signal
+    result["patterns"] = patterns_all
+
+    return result
+
+
 def _parse_board_etf(row: dict) -> dict | None:
     """Нормализовать строку _fetch_board_etf в словарь скринера."""
     secid = row.get("SECID")

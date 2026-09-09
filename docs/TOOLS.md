@@ -541,6 +541,23 @@ MIACR — фактические средневзвешенные ставки �
 - **Пример:** `technical_indicators("SBER")` → `{"rsi_14":52.3,"stochastic_k":72.1,"macd_signal":"bullish","adx":18.5,"trend_strength":"weak","adx_plus_di":25.1,...}`
 - **Использование:** комплексная TA-оценка любого инструмента (акция, ETF, облигация) — один вызов вместо ручных расчётов.
 
+### 🕯 `candlestick_patterns(query, days=90)`
+Распознавание классических свечных паттернов из дневных свечей MOEX (OHLCV).
+- **Принимает:** `query` — тикер/ISIN; `days` — период (по умолч. 90).
+- **Возвращает:** `{secid, period_days, trading_days, candles_analyzed,
+  total_bullish, total_bearish, total_neutral, signal_score_bullish, signal_score_bearish, signal, patterns}`.
+  - `patterns` — список обнаруженных паттернов, отсортированных по силе и близости к концу периода:
+    - `pattern` — имя паттерна (14 штук): `doji` (sub: standard/dragonfly/gravestone/long_legged), `hammer`, `hanging_man`, `shooting_star`, `bullish_marubozu`, `bearish_marubozu`, `bullish_engulfing`, `bearish_engulfing`, `bullish_harami`, `bearish_harami`, `piercing_line`, `dark_cloud_cover`, `tweezer_top`, `tweezer_bottom`, `morning_star`, `evening_star`, `three_white_soldiers`, `three_black_crows`;
+    - `bar_type` — `single` / `double` / `triple`;
+    - `signal` — `bullish` / `bearish` / `neutral`;
+    - `strength` — 1 (слабый), 2 (средний), 3 (сильный); усиливается при совпадении с позицией в периоде (near-high → bearish stronger, near-low → bullish stronger);
+    - `bars_back` — сколько баров назад от последней свечи;
+    - `date` — дата последней свечи паттерна;
+    - `pattern_details` — структурированные детали (для star: gap_below_mid/gap_above_mid, pierce_50pct, body_ratio; для tweezer: near_period_extreme; для piercing_line/dark_cloud: intrusion_pct%; для marubozu: normalized_range);
+  - `signal` — сводный сигнал: `bullish` / `slightly_bullish` / `neutral` / `slightly_bearish` / `bearish` (взвешенная сумма strength по direction).
+- **Пример:** `candlestick_patterns("SBER")` → `{"secid":"SBER","signal":"slightly_bullish","patterns":[{"pattern":"hammer","bar_type":"single","signal":"bullish","strength":2,"bars_back":2,"date":"2025-06-05"}],...}`
+- **Использование:** дополнение к `technical_indicators` — числовые индикаторы + визуальная геометрия свечей. Сильный паттерн (strength ≥ 2) + подтверждение индикатором (RSI, MACD) повышает уверенность сигнала.
+
 ---
 
 ## ETF / БПИФ

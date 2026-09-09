@@ -55,7 +55,7 @@ GROUPS: dict[str, set[str]] = {
     },
     # Индикаторы, волатильность, сплиты
     "technical": {
-        "price_volatility", "liquidity_assessment", "technical_indicators", "moex_splits",
+        "price_volatility", "liquidity_assessment", "technical_indicators", "moex_splits", "candlestick_patterns",
     },
     # Скринеры, ранжирование, сравнительный анализ
     "screening": {
@@ -1421,6 +1421,24 @@ async def technical_indicators(query: str, ctx: Context, days: int = 90) -> dict
     return moex.technical_indicators(query, days)
 
 
+@_tool()
+async def candlestick_patterns(query: str, ctx: Context, days: int = 90) -> dict:
+    """Candlestick pattern recognition from daily OHLCV candles.
+
+    Detects 14 classic patterns: doji (4 variants), hammer, hanging man,
+    shooting star, bullish/bearish marubozu, engulfing (bullish/bearish),
+    harami, piercing line, dark cloud cover, tweezer top/bottom,
+    morning/evening star, three white soldiers, three black crows.
+    Each pattern carries signal (bullish/bearish/neutral), strength (1-3),
+    and positional context (period high/low percentile).
+    Aggregate signal = weighted sum of all detected patterns.
+    Args: query — ticker or ISIN; days — lookback (default 90).
+    Returns: {secid, trading_days, signal, total_bullish, total_bearish, patterns: [...]}}.
+    """
+    await ctx.report_progress(0, 2, "Fetching candle data + scanning patterns")
+    return moex.candlestick_analysis(query, days)
+
+
 # ─────────────────────────── ETF / БПИФ ───────────────────────────
 @_tool()
 async def etf_fund_info(query: str, ctx: Context) -> dict:
@@ -1813,7 +1831,11 @@ def ref_moex_sec_types() -> dict:
                 "Ichimoku(9,26,52), Parabolic SAR, EMA(12/26), SMA(50/200), MA golden/death cross, "
                 "Momentum(10), ROC(10). Volatility: Bollinger Bands(20,2). "
                 "Volume: OBV + trend, CMF(20), VWAP. "
-                "Support/Resistance: Pivot Points (classic), Fibonacci retracements.",
+                "Support/Resistance: Pivot Points (classic), Fibonacci retracements. "
+                "Candlestick patterns (candlestick_patterns tool): doji (4 variants), hammer, "
+                "hanging_man, shooting_star, bullish/bearish_marubozu, engulfing, harami, "
+                "piercing_line, dark_cloud_cover, tweezer_top/bottom, morning/evening_star, "
+                "three_white_soldiers, three_black_crows.",
     mime_type="application/json",
 )
 def ref_technical_indicators() -> dict:

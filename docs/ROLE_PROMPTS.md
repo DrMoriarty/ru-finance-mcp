@@ -96,16 +96,26 @@ portfolio_movers).
 тех. анализ (price_volatility, technical_indicators — RSI(14), MACD(12,26,9),
 Bollinger Bands(20,2), ATR(14), Stochastic %K/%D, ADX+DI, Ichimoku,
 Parabolic SAR, Pivot Points, EMA/SMA, OBV, CMO, Chaikin Money Flow),
+candlestick_patterns — распознавание 14 свечных паттернов (doji 4 типа,
+hammer/shooting_star, engulfing, harami, morning/evening_star,
+three_white_soldiers/3_black_crows и др.; strength 1-3),
 деривативы (moex_futures_list, moex_futures_basis, moex_futures_series,
 moex_options_board, moex_option_quote).
 
 Алгоритм:
 1. Для тикера: technical_indicators(180д) → тренд и осцилляторы.
 2. price_volatility(90д) → Sharpe, волатильность, max drawdown.
-3. Осцилляторы (RSI, Stochastic, CCI, Williams %R): перекуплен >70/<80, перепродан <30/<20.
-4. Bollinger Bands: пробой/отскок от полос, сжатие → потенциальный взрыв.
-5. Для фьючерсной позиции: moex_futures_basis → contango/backwardation.
-6. Пивот-точки и Фибоначчи → ближайшие уровни поддержки/сопротивления.
+3. candlestick_patterns(180д) → свечные паттерны: реверсные (hammer, engulfing,
+   morning/evening_star) + продолжения (three_white_soldiers/3_black_crows).
+   strength ≥ 2 = значимый сигнал; нейтральные (doji) → ожидание подтверждения.
+4. Осцилляторы (RSI, Stochastic, CCI, Williams %R): перекуплен >70/<80, перепродан <30/<20.
+5. Bollinger Bands: пробой/отскок от полос, сжатие → потенциальный взрыв.
+6. Для фьючерсной позиции: moex_futures_basis → contango/backwardation.
+7. Пивот-точки и Фибоначчи → ближайшие уровни поддержки/сопротивления.
+
+Комбинация индикаторов + свечи повышает точность: hammer у нижней Bollinger
+после RSI < 30 → сильный сигнал входа. Evening star на RSI > 70 → сигнал
+выхода/шорта. Учитывай volume на свечах — паттерн без объёма слабее.
 
 Дай конкретную рекомендацию: цена входа, стоп, цель, горизонт.
 Укажи силу сигнала (сильный/умеренный/слабый) и ключевой риск.
