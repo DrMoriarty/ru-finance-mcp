@@ -1,4 +1,4 @@
-"""Доменные отчёты по портфелю: парсинг + snapshot/rate_whatif/income/movers.
+"""Доменные отчёты по портфелю: парсинг + snapshot/rate_whatif/income/movers/alpha_beta.
 
 Сервер полностью generic: портфель ВСЕГДА передаётся параметром `assets_text`
 (markdown в формате как в примере ниже). Кода/путей к чьим-либо конкретным
@@ -23,7 +23,10 @@ P&L приблизительный (средняя цена покупки, бе
 """
 from __future__ import annotations
 
+import math
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timedelta
 
 from . import bonds, cbr, moex, rate, smartlab
 
@@ -343,6 +346,138 @@ def movers(assets_text: str) -> dict:
     return {
         "day_losers": by_day[:3], "day_gainers": list(reversed(by_day[-3:])),
         "worst_vs_cost": by_pnl[:3], "best_vs_cost": list(reversed(by_pnl[-3:])),
+    }
+
+
+def alpha_beta(assets_text: str, benchmark: str = "IMOEX", days: int = 252) -> dict:
+    """Alpha, Beta и корреляция (ρ) портфеля к бенчмарку.
+
+    Использует дневные close из moex.history() за последние `days` торговых дней.
+    Веса позиций считаются по текущей стоимости (value / total).
+    Бенчмарк по умолчанию: IMOEX. Для ОФЗ-портфеля лучше передать 'RGBITR'.
+    """
+    positions = [_enrich(p) for p in parse_assets(assets_text)]
+    total = sum(p["value"] for p in positions if p.get("value"))
+    if not total:
+        return {"error": "портфель пуст или нет цен"}
+
+    till = datetime.now().strftime("%Y-%m-%d")
+    frm = (datetime.now() - timedelta(days=days * 2)).strftime("%Y-%m-%d")  # запас на выходные
+
+    def _fetch_hist(query: str) -> tuple[str, list[dict]]:
+        try:
+            return query, moex.history(query, frm, till)
+        except Exception:
+            return query, []
+
+    # Параллельно тянем историю всех позиций + бенчмарк
+    queries = [p["search_key"] for p in positions] + [benchmark]
+    hist_map: dict[str, dict[str, float]] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_fetch_hist, q): q for q in queries}
+        for fut in as_completed(futs):
+            q, rows = fut.result()
+            prices = {}
+            for r in rows:
+                d = (r.get("TRADEDATE") or r.get("begin", ""))[:10]
+                c = r.get("CLOSE") or r.get("close")
+                if d and c:
+                    prices[d] = float(c)
+            if prices:
+                hist_map[q] = prices
+
+    if benchmark not in hist_map:
+        return {"error": f"нет истории по бенчмарку {benchmark!r}"}
+
+    bench_hist = hist_map[benchmark]
+    dates = sorted(bench_hist.keys())
+    if len(dates) < 10:
+        return {"error": f"слишком мало данных по бенчмарку ({len(dates)} дней)"}
+
+    # Строим массив дневных доходностей портфеля и бенчмарка
+    # Для позиций без истории — пропускаем (вес перераспределяется на остальных)
+    skip_secids: list[str] = []
+    active_positions = []
+    for p in positions:
+        q = p["search_key"]
+        if q in hist_map and len(hist_map[q]) >= 2:
+            active_positions.append(p)
+        else:
+            skip_secids.append(p.get("secid") or q)
+
+    active_total = sum(p["value"] for p in active_positions if p.get("value"))
+    if not active_total:
+        return {"error": "нет исторических данных ни по одной позиции"}
+
+    # Нормализованные веса (только по позициям с историей)
+    weights = {
+        p["search_key"]: (p["value"] or 0) / active_total
+        for p in active_positions
+    }
+
+    port_returns: list[float] = []
+    bench_returns: list[float] = []
+    for i in range(1, len(dates)):
+        d_prev, d_curr = dates[i - 1], dates[i]
+        b_prev, b_curr = bench_hist.get(d_prev), bench_hist.get(d_curr)
+        if not b_prev or not b_curr or b_prev == 0:
+            continue
+        b_ret = (b_curr - b_prev) / b_prev
+
+        p_ret = 0.0
+        weight_sum = 0.0
+        for q, w in weights.items():
+            h = hist_map.get(q, {})
+            pp, pc = h.get(d_prev), h.get(d_curr)
+            if pp and pc and pp > 0:
+                p_ret += w * (pc - pp) / pp
+                weight_sum += w
+        if weight_sum < 0.01:
+            continue  # в этот день нет данных по портфелю
+
+        port_returns.append(p_ret)
+        bench_returns.append(b_ret)
+
+    n = len(port_returns)
+    if n < 10:
+        return {"error": f"слишком мало совпадающих дней ({n})"}
+
+    mu_p = sum(port_returns) / n
+    mu_b = sum(bench_returns) / n
+    var_b = sum((b - mu_b) ** 2 for b in bench_returns) / n
+    cov_pb = sum((port_returns[i] - mu_p) * (bench_returns[i] - mu_b) for i in range(n)) / n
+    var_p = sum((p - mu_p) ** 2 for p in port_returns) / n
+
+    if var_b == 0:
+        return {"error": "дисперсия бенчмарка = 0"}
+
+    beta = cov_pb / var_b
+    alpha_daily = mu_p - beta * mu_b
+    alpha_ann = alpha_daily * 252 * 100  # % годовых
+    rho = cov_pb / (math.sqrt(var_p) * math.sqrt(var_b)) if var_p > 0 else None
+
+    # Статистика для контроля
+    mu_p_ann = mu_p * 252 * 100
+    mu_b_ann = mu_b * 252 * 100
+    vol_p = math.sqrt(var_p) * math.sqrt(252) * 100
+    vol_b = math.sqrt(var_b) * math.sqrt(252) * 100
+    sharpe = (mu_p_ann - cbr.key_rate(tail=1).get("latest", 0)) / vol_p if vol_p > 0 else None
+
+    return {
+        "benchmark": benchmark,
+        "period_days": n,
+        "beta": round(beta, 3),
+        "alpha_ann_pct": round(alpha_ann, 2),
+        "rho": round(rho, 3) if rho is not None else None,
+        "portfolio_return_ann_pct": round(mu_p_ann, 2),
+        "benchmark_return_ann_pct": round(mu_b_ann, 2),
+        "portfolio_vol_ann_pct": round(vol_p, 2),
+        "benchmark_vol_ann_pct": round(vol_b, 2),
+        "sharpe": round(sharpe, 2) if sharpe is not None else None,
+        "weights": {q: round(w * 100, 1) for q, w in weights.items()},
+        "skipped": skip_secids or None,
+        "note": ("alpha = Rp − β·Rb (годовых); β = Cov(Rp,Rb)/Var(Rb); "
+                 "ρ = Corr(Rp,Rb); веса — текущая доля стоимости"),
     }
 
 

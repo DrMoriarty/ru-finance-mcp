@@ -94,10 +94,11 @@ GROUPS: dict[str, set[str]] = {
         "moex_options_assets", "moex_options_board",
         "moex_option_quote", "moex_option_orderbook", "moex_option_history",
     },
-    # Портфельный риск: снимок, сценарии, доходы
+    # Портфельный риск: снимок, сценарии, доходы, alpha/beta
     "risk": {
         "portfolio_snapshot", "portfolio_rate_whatif",
         "portfolio_income_calendar", "portfolio_movers",
+        "portfolio_alpha_beta",
     },
     # Опционный калькулятор MOEX: доски, Greeks, волатильность, стратегии
     "option_calc": {
@@ -1735,6 +1736,30 @@ def portfolio_movers(assets: str) -> dict:
     Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
     return portfolio.movers(assets)
+
+
+@_tool()
+def portfolio_alpha_beta(
+    assets: str,
+    benchmark: str = "IMOEX",
+    days: int = 252,
+) -> dict:
+    """Portfolio alpha, beta and correlation (rho) vs benchmark.
+
+    Uses daily closes for the last `days` trading days. Current weights by value.
+    Default benchmark: IMOEX (IMOEX index). For bond-heavy portfolios consider 'RGBI'.
+    Useful for evaluating how much of the portfolio return comes from market exposure (beta)
+    vs skill (alpha), and how closely it tracks the benchmark (rho).
+
+    Args:
+        assets — markdown portfolio (same as portfolio_snapshot).
+        benchmark — MOEX ticker/index (e.g. 'IMOEX', 'RGBI', 'RGBITR', 'MCFTR', 'RTSI').
+        days — lookback in trading days (default 252 ≈ 1 year).
+    Returns: benchmark, period_days, beta, alpha_ann_pct, rho,
+        portfolio/benchmark return and volatility (annualised), sharpe,
+        weights, skipped positions.
+    """
+    return portfolio.alpha_beta(assets, benchmark=benchmark, days=days)
 
 
 # ─────────────────────────── MOEX Option Calculator ───────────────────────────

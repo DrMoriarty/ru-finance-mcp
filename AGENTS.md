@@ -115,7 +115,7 @@
 | fixed_income | 10 | `moex_emitent_bonds`, `moex_bond_coupons`, `moex_bond_market_aggregates`, `moex_zcyc_history`, `bond_report`, `bond_accrued_interest`, `bond_synthetic_yield`, `raexpert_rating`, `zpif_payments`, `zpif_funds_list` |
 | etf | 3 | `etf_fund_info`, `etf_premium_discount`, `etf_tracking_error` |
 | derivatives | 10 | `moex_futures_list`, `moex_futures_open_interest`, `moex_futures_series`, `moex_futures_promo`, `moex_futures_basis`, `moex_options_assets`, `moex_options_board`, `moex_option_quote`, `moex_option_orderbook`, `moex_option_history` |
-| risk | 4 | `portfolio_snapshot`, `portfolio_rate_whatif`, `portfolio_income_calendar`, `portfolio_movers` |
+| risk | 5 | `portfolio_snapshot`, `portfolio_rate_whatif`, `portfolio_income_calendar`, `portfolio_movers`, `portfolio_alpha_beta` |
 | option_calc | 13 | `option_calc_assets`, `option_calc_asset_detail`, `option_calc_futures`, `option_calc_options`, `option_calc_option_brief`, `option_calc_series`, `option_calc_series_detail`, `option_calc_series_options`, `option_calc_optionboard`, `option_calc_volatility_graph`, `option_calc_portfolio`, `option_calc_portfolio_graph`, `option_calc_initial_margin` |
 
 ### Роли агентов (наборы групп)
