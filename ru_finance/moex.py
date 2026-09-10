@@ -477,11 +477,34 @@ def _auto_interval(frm: str, till: str) -> str:
     return "24"
 
 
-def candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
+_CANDLE_ESTIMATE_PER_DAY: dict[str, float] = {
+    "1":  1000,   # ~1000 минутных свечей в торгуемый день
+    "10": 100,
+    "60": 14,
+    "24": 1,
+    "7":  1 / 7,
+    "31": 1 / 31,
+    "4":  1 / 91,
+}
+
+_MAX_CANDLES_DEFAULT = 100
+
+
+def _estimate_candle_count(frm: str, till: str, interval: str) -> int:
+    d0 = datetime.fromisoformat(frm)
+    d1 = datetime.fromisoformat(till)
+    days = max((d1 - d0).days, 1)
+    mult = _CANDLE_ESTIMATE_PER_DAY.get(interval, 1)
+    return int(days * mult)
+
+
+def candles(query: str, frm: str, till: str, interval: str = "",
+            allow_big_output: bool = False) -> list[dict]:
     """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
 
     Пустой query — ошибка. Пустой или некорректный interval — авто-выбор (≤50 свечей).
     Принимает альтернативные наименования: day/день, week/неделя, month/мес, quarter/кв, hour/час.
+    allow_big_output: False по умолчанию — если запрошено >100 свечей, ошибка.
     """
     if not query or not query.strip():
         raise ValueError("moex_candles: query не может быть пустым")
@@ -489,6 +512,13 @@ def candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
         interval = _INTERVAL_ALIASES.get(interval.lower().strip(), "")
     if not interval:
         interval = _auto_interval(frm, till)
+    est = _estimate_candle_count(frm, till, interval)
+    if est > _MAX_CANDLES_DEFAULT and not allow_big_output:
+        raise ValueError(
+            f"Запрошено ~{est} свечей ({frm}…{till}, интервал {interval}). "
+            f"Максимум по умолчанию: {_MAX_CANDLES_DEFAULT}. "
+            f"Если уверены — установите параметр allow_big_output=True."
+        )
     r = resolve(query)
     raw = exec_template(T_CANDLES, {
         "engine": r["engine"], "market": r["market"],

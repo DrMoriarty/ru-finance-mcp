@@ -400,15 +400,18 @@ def moex_bond_coupons(query: str) -> list[dict]:
 
 
 @_tool()
-def moex_candles(query: str, frm: str, till: str, interval: str = "") -> list[dict]:
+def moex_candles(query: str, frm: str, till: str, interval: str = "",
+                 allow_big_output: bool = False) -> list[dict]:
     """OHLCV candles for a period.
 
     Args: query (required, non-empty); interval: 1,10,60(hour/час),24(day/день),
     7(week/неделя),31(month/мес),4(quarter/кв); empty=auto-select (≤50 candles).
     frm/till ('YYYY-MM-DD').
+    allow_big_output: False by default — returns error if >100 candles estimated.
+    Set to True if you explicitly need a large dataset.
     Returns [{begin, open, high, low, close, value, volume}].
     """
-    return moex.candles(query, frm, till, interval)
+    return moex.candles(query, frm, till, interval, allow_big_output=allow_big_output)
 
 
 @_tool()
