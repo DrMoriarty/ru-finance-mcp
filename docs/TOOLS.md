@@ -764,16 +764,20 @@ API: `iss.moex.com/iss/apps/option-calc/v1`. Расчёт Greeks, IV, волат
 - **Возвращает:** `[{strike, volatility}]` — кривая implied volatility по страйкам.
 - **Пример:** `option_calc_volatility_graph('Si', 'SI-9.26M100926XA')` → smile с U-образной формой.
 
-### 🧮 `option_calc_portfolio(asset_code, positions, asset_type=None, delta_sigma=None, date_of_calculation=None)`
+### 🧮 `option_calc_portfolio(asset_code, positions, delta_sigma=None, date_of_calculation=None)`
 Расчёт опционного портфеля: агрегированные Greeks, P&L, гарантийное обеспечение.
-- **Принимает:** `asset_code` (`'Si'`), `positions` — список позиций `[{secid, quantity, price?, volatility?, netted_im?}]`. `secid` — код фьючерса или опциона. `quantity`: положительное = покупка, отрицательное = продажа. `asset_type`, `delta_sigma` (сдвиг волатильности, %, для what-if), `date_of_calculation` (`'YYYY-MM-DD'`, для what-if).
+- **Принимает:** `asset_code` (`'Si'`), `positions` — список позиций `[{secid, type, quantity, price?, volatility?, netted_im?}]`.
+  - `secid` — код из `option_calc_options` или `moex_futures_list` (НЕ конструировать вручную!).
+  - `type` — **обязательно**: `'option'` или `'futures'`. Без этого API считает что это фьючерс и вернёт 422.
+  - `quantity`: положительное = покупка, отрицательное = продажа.
+  - `delta_sigma` (сдвиг волатильности, %, для what-if), `date_of_calculation` (`'YYYY-MM-DD'`, для what-if).
 - **Возвращает:** `{positions: [{secid, type, quantity, price, delta, gamma, vega, theta, rho, profit_and_loss, profit_and_loss_rub, fee, theorprice, strike, volatility, expiration_date, days_until_expiring, expired}], total: {delta, gamma, vega, theta, rho, profit_and_loss, profit_and_loss_rub, fee}, initial_margin}`.
-- **Пример:** `option_calc_portfolio('Si', [{secid:'Si84000BC6A', quantity:-10}, {secid:'SIU6', quantity:5}])` → совокупный портфель с Greeks.
+- **Пример:** `option_calc_portfolio('Si', [{secid:'Si84000BI6', type:'option', quantity:-10}, {secid:'SIU6', type:'futures', quantity:5}])` → совокупный портфель с Greeks.
 - **What-if:** `delta_sigma=-5` — что будет, если IV упадёт на 5%.
 
-### 🧮 `option_calc_portfolio_graph(asset_code, positions, indicator, asset_type=None, delta_sigma=None, date_of_calculation=None)`
+### 🧮 `option_calc_portfolio_graph(asset_code, positions, indicator, delta_sigma=None, date_of_calculation=None)`
 График P&L или Greeks в зависимости от цены базового актива.
-- **Принимает:** `asset_code`, `positions` (как в `option_calc_portfolio`), `indicator` — `'profit_and_loss'|'delta'|'gamma'|'vega'|'theta'|'rho'`, остальные параметры опциональны.
+- **Принимает:** `asset_code`, `positions` (как в `option_calc_portfolio`, **с полем `type`**), `indicator` — `'profit_and_loss'|'delta'|'gamma'|'vega'|'theta'|'rho'`, остальные параметры опциональны.
 - **Возвращает:** `{now: [{underlying_price, value}], on_expiration: [{underlying_price, value}], on_what_if: [{underlying_price, value}]}`.
   - `now` — текущий момент (с текущей IV);
   - `on_expiration` — на дату экспирации;
@@ -782,9 +786,12 @@ API: `iss.moex.com/iss/apps/option-calc/v1`. Расчёт Greeks, IV, волат
 
 ### 🧮 `option_calc_initial_margin(positions)`
 Гарантийное обеспечение для произвольного набора позиций (кросс-БА).
-- **Принимает:** `positions` — `[{secid, quantity, price, netted_im?}]`. `secid` — любой код фьючерса/опциона FORTS. `netted_im` — неттирование ГО (по умолч. `true`).
+- **Принимает:** `positions` — `[{secid, type, quantity, price, netted_im?}]`.
+  - `secid` — любой код фьючерса/опциона FORTS.
+  - `type` — **обязательно**: `'option'` или `'futures'`.
+  - `netted_im` — неттирование ГО (по умолч. `true`).
 - **Возвращает:** `{initial_margin: float}` (₽).
-- **Пример:** `option_calc_initial_margin([{secid:'SIU6', quantity:1, price:84000}])` → `{"initial_margin":13260.16}`.
+- **Пример:** `option_calc_initial_margin([{secid:'SIU6', type:'futures', quantity:1, price:84000}])` → `{"initial_margin":13260.16}`.
 
 ## Технические заметки
 

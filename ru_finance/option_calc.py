@@ -17,25 +17,64 @@ Endpoints:
 """
 from __future__ import annotations
 
+import time
+
 import requests
 
 BASE = "https://iss.moex.com/iss/apps/option-calc/v1"
 
 
-def _get(path: str, params: dict | None = None) -> dict | list:
-    """GET request to option calculator API."""
-    url = f"{BASE}/{path.lstrip('/')}"
-    r = requests.get(url, params=params, timeout=15)
-    r.raise_for_status()
-    return r.json()
+def _extract_error(r: requests.Response) -> str:
+    """Extract human-readable error from MOEX API response."""
+    status = r.status_code
+    try:
+        body = r.json()
+        if isinstance(body, dict):
+            detail = body.get("detail")
+            if isinstance(detail, list):
+                return f"{status}: {'; '.join(str(d) for d in detail)}"
+            if isinstance(detail, str):
+                return f"{status}: {detail}"
+    except Exception:  # noqa: BLE001
+        pass
+    text = r.text[:200].strip()
+    return f"{status}: {text}" if text else f"{status} error"
 
 
-def _post(path: str, json_body: dict) -> dict:
-    """POST request to option calculator API."""
+def _get(path: str, params: dict | None = None, retries: int = 4) -> dict | list:
+    """GET request to option calculator API with retries."""
     url = f"{BASE}/{path.lstrip('/')}"
-    r = requests.post(url, json=json_body, timeout=15)
-    r.raise_for_status()
-    return r.json()
+    last: Exception | None = None
+    for i in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=15)
+            if not r.ok:
+                raise requests.HTTPError(_extract_error(r), response=r)
+            return r.json()
+        except requests.HTTPError:
+            raise  # no retry on HTTP errors
+        except Exception as e:  # noqa: BLE001 — network errors, retry
+            last = e
+            time.sleep(0.5 * (i + 1))
+    raise last  # type: ignore[misc]
+
+
+def _post(path: str, json_body: dict, retries: int = 4) -> dict:
+    """POST request to option calculator API with retries."""
+    url = f"{BASE}/{path.lstrip('/')}"
+    last: Exception | None = None
+    for i in range(retries):
+        try:
+            r = requests.post(url, json=json_body, timeout=15)
+            if not r.ok:
+                raise requests.HTTPError(_extract_error(r), response=r)
+            return r.json()
+        except requests.HTTPError:
+            raise  # no retry on HTTP errors
+        except Exception as e:  # noqa: BLE001 — network errors, retry
+            last = e
+            time.sleep(0.5 * (i + 1))
+    raise last  # type: ignore[misc]
 
 
 # ── Reference data ──

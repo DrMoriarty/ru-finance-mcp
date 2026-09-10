@@ -1786,7 +1786,10 @@ def option_calc_asset_detail(asset_code: str, asset_type: str | None = None) -> 
     Args: asset_code — trading code ('Si', 'GAZR', 'SBRF', 'RTS').
     Returns: {asset_code, title, asset_type, asset_subtype}.
     """
-    return option_calc.asset_detail(asset_code, asset_type=asset_type)
+    try:
+        return option_calc.asset_detail(asset_code, asset_type=asset_type)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1797,7 +1800,10 @@ def option_calc_futures(asset_code: str, expiration_date: str | None = None) -> 
     expiration_date — optional filter 'YYYY-MM-DD'.
     Returns [{futures_code, asset_code, asset_type, expiration_date}].
     """
-    return option_calc.futures_list(asset_code, expiration_date=expiration_date)
+    try:
+        return option_calc.futures_list(asset_code, expiration_date=expiration_date)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1816,10 +1822,13 @@ def option_calc_options(
     Returns [{secid, asset_code, asset_type, futures_code, expiration_date,
     series_type, strike, option_type}].
     """
-    return option_calc.options_list(
-        asset_code, asset_type=asset_type, expiration_date=expiration_date,
-        series_type=series_type, strike=strike, option_type=option_type,
-    )
+    try:
+        return option_calc.options_list(
+            asset_code, asset_type=asset_type, expiration_date=expiration_date,
+            series_type=series_type, strike=strike, option_type=option_type,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1833,17 +1842,20 @@ def option_calc_option_brief(
 ) -> dict:
     """Brief summary for a single option: Greeks, theor price, IV.
 
-    Args: asset_code — underlying ('Si'), secid — option code ('Si70000BI6A'),
+    Args: asset_code — underlying ('Si'), secid — option code (from option_calc_options),
     asset_type, days_until_expiring (override), underlying_price (RUB, override),
     volatility (%, override implied vol).
     Returns: {secid, delta, gamma, vega, theta, rho, theorprice, volatility,
     underlying_price, days_until_expiring, fee, expiring_date, ...}.
     """
-    return option_calc.option_brief(
-        asset_code, secid, asset_type=asset_type,
-        days_until_expiring=days_until_expiring,
-        underlying_price=underlying_price, volatility=volatility,
-    )
+    try:
+        return option_calc.option_brief(
+            asset_code, secid, asset_type=asset_type,
+            days_until_expiring=days_until_expiring,
+            underlying_price=underlying_price, volatility=volatility,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1854,7 +1866,10 @@ def option_calc_series(asset_code: str, asset_type: str | None = None) -> list[d
     Returns [{optionseries_code, asset_code, asset_type, futures_code,
     series_type, expiration_date, central_strike, call: {...}, put: {...}, updatetime}].
     """
-    return option_calc.option_series_list(asset_code, asset_type=asset_type)
+    try:
+        return option_calc.option_series_list(asset_code, asset_type=asset_type)
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1869,9 +1884,12 @@ def option_calc_series_detail(
     Returns: {optionseries_code, asset_code, asset_type, futures_code,
     series_type, expiration_date, central_strike, call: {...}, put: {...}, updatetime}.
     """
-    return option_calc.option_series_detail(
-        asset_code, optionseries_code, asset_type=asset_type,
-    )
+    try:
+        return option_calc.option_series_detail(
+            asset_code, optionseries_code, asset_type=asset_type,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1889,10 +1907,13 @@ def option_calc_series_options(
     Returns [{secid, asset_code, asset_type, futures_code, expiration_date,
     series_type, strike, option_type}].
     """
-    return option_calc.series_options(
-        asset_code, optionseries_code, asset_type=asset_type,
-        strike=strike, option_type=option_type,
-    )
+    try:
+        return option_calc.series_options(
+            asset_code, optionseries_code, asset_type=asset_type,
+            strike=strike, option_type=option_type,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1910,9 +1931,12 @@ def option_calc_optionboard(
     theorprice, last, bid, offer, volatility, intrinsic_value, timed_value, ...}],
     put: [same]}.
     """
-    return option_calc.option_board(
-        asset_code, optionseries_code, asset_type=asset_type, rows=rows,
-    )
+    try:
+        return option_calc.option_board(
+            asset_code, optionseries_code, asset_type=asset_type, rows=rows,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1926,9 +1950,12 @@ def option_calc_volatility_graph(
     Args: asset_code, optionseries_code, asset_type.
     Returns [{strike, volatility}].
     """
-    return option_calc.volatility_graph(
-        asset_code, optionseries_code, asset_type=asset_type,
-    )
+    try:
+        return option_calc.volatility_graph(
+            asset_code, optionseries_code, asset_type=asset_type,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1941,12 +1968,20 @@ def option_calc_portfolio(
 ) -> dict:
     """Calculate option portfolio: aggregated Greeks, P&L, initial margin.
 
+    IMPORTANT: secid MUST come from option_calc_options or option_calc_series_options.
+    Do NOT construct secid manually — FORTS option codes are NOT predictable
+    (e.g. SI84500BI6, not SI84500BU6). Always look up valid secids first.
+
+    IMPORTANT: Each position MUST have 'type' field: 'option' or 'futures'.
+
     Args: asset_code — underlying ('Si'), positions — list of positions
-    [{secid, quantity, price?, volatility?, netted_im?}].
-    secid can be futures or option code. quantity: positive=buy, negative=sell.
-    asset_type — optional, delta_sigma — vol shift (%) for what-if,
+    [{secid, type, quantity, price?, volatility?, netted_im?}].
+    type: 'option' or 'futures' (REQUIRED).
+    secid — code from option_calc_options or moex_futures_list.
+    quantity: positive=buy, negative=sell.
+    delta_sigma — vol shift (%) for what-if,
     date_of_calculation — 'YYYY-MM-DD' for what-if.
-    Returns: {positions: [{secid, delta, gamma, vega, theta, rho,
+    Returns: {positions: [{secid, type, delta, gamma, vega, theta, rho,
     profit_and_loss, profit_and_loss_rub, fee, theorprice, ...}],
     total: {delta, gamma, vega, theta, rho, profit_and_loss, fee},
     initial_margin}.
@@ -1958,9 +1993,12 @@ def option_calc_portfolio(
             what_if["delta_sigma"] = delta_sigma
         if date_of_calculation is not None:
             what_if["date_of_calculation"] = date_of_calculation
-    return option_calc.calculate_portfolio(
-        asset_code, positions, asset_type=asset_type, what_if=what_if,
-    )
+    try:
+        return option_calc.calculate_portfolio(
+            asset_code, positions, asset_type=asset_type, what_if=what_if,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
@@ -1974,9 +2012,15 @@ def option_calc_portfolio_graph(
 ) -> dict:
     """Portfolio graph: P&L or Greeks vs underlying price.
 
-    Args: asset_code, positions (same as option_calc_portfolio),
+    IMPORTANT: secid MUST come from option_calc_options or option_calc_series_options.
+    Do NOT construct secid manually — always look up valid secids first.
+
+    IMPORTANT: Each position MUST have 'type' field: 'option' or 'futures'.
+
+    Args: asset_code, positions (same as option_calc_portfolio,
+    each position must have secid, type, quantity),
     indicator — 'profit_and_loss'|'delta'|'gamma'|'vega'|'theta'|'rho',
-    asset_type, delta_sigma, date_of_calculation.
+    delta_sigma, date_of_calculation.
     Returns: {now: [{underlying_price, value}], on_expiration: [...],
     on_what_if: [...]}.
     """
@@ -1987,20 +2031,32 @@ def option_calc_portfolio_graph(
             what_if["delta_sigma"] = delta_sigma
         if date_of_calculation is not None:
             what_if["date_of_calculation"] = date_of_calculation
-    return option_calc.portfolio_graph(
-        asset_code, positions, indicator, asset_type=asset_type, what_if=what_if,
-    )
+    try:
+        return option_calc.portfolio_graph(
+            asset_code, positions, indicator, asset_type=asset_type, what_if=what_if,
+        )
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @_tool()
 def option_calc_initial_margin(positions: list[dict]) -> dict:
     """Calculate initial margin for a set of futures/options positions.
 
-    Args: positions — list of {secid, quantity, price, netted_im?}.
+    IMPORTANT: secid MUST come from option_calc_options or option_calc_series_options.
+    Do NOT construct secid manually — always look up valid secids first.
+
+    Each position MUST have 'type' field: 'option' or 'futures'.
+
+    Args: positions — list of {secid, type, quantity, price, netted_im?}.
     secid — any futures or option code from FORTS (cross-asset OK).
+    type: 'option' or 'futures' (REQUIRED).
     Returns: {initial_margin: float} (RUB).
     """
-    return {"initial_margin": option_calc.initial_margin(positions)}
+    try:
+        return {"initial_margin": option_calc.initial_margin(positions)}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ─────────────────────────── Resources (reference data) ───────────────────────────
