@@ -1809,24 +1809,31 @@ def option_calc_futures(asset_code: str, expiration_date: str | None = None) -> 
 @_tool()
 def option_calc_options(
     asset_code: str,
+    expiration_date: str,
     asset_type: str | None = None,
-    expiration_date: str | None = None,
     series_type: str | None = None,
     strike: float | None = None,
     option_type: str | None = None,
-) -> list[dict]:
+    limit: int = 50,
+) -> list[dict] | dict:
     """Options for underlying asset with filters.
 
-    Args: asset_code, asset_type, expiration_date ('YYYY-MM-DD'),
-    series_type ('W'|'M'|'Q'), strike, option_type ('call'|'put').
+    Args: asset_code, expiration_date (REQUIRED, 'YYYY-MM-DD', get from option_calc_series),
+    asset_type, series_type ('W'|'M'|'Q'), strike, option_type ('call'|'put'),
+    limit — max results (default 50, max 200).
     Returns [{secid, asset_code, asset_type, futures_code, expiration_date,
     series_type, strike, option_type}].
     """
     try:
-        return option_calc.options_list(
+        result = option_calc.options_list(
             asset_code, asset_type=asset_type, expiration_date=expiration_date,
             series_type=series_type, strike=strike, option_type=option_type,
         )
+        if len(result) > 200:
+            result = result[:200]
+        if len(result) > limit:
+            result = result[:limit]
+        return result
     except Exception as e:
         return {"error": str(e)}
 

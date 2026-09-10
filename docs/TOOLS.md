@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-94 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+95 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -725,11 +725,11 @@ API: `iss.moex.com/iss/apps/option-calc/v1`. Расчёт Greeks, IV, волат
 - **Возвращает:** `[{futures_code, asset_code, asset_type, expiration_date}]`.
 - **Пример:** `option_calc_futures('Si')` → `[{futures_code:"SIU6", expiration_date:"2026-09-18", ...}, ...]`.
 
-### 🟢 `option_calc_options(asset_code, asset_type=None, expiration_date=None, series_type=None, strike=None, option_type=None)`
+### 🟢 `option_calc_options(asset_code, expiration_date, asset_type=None, series_type=None, strike=None, option_type=None, limit=50)`
 Опционы на базовый актив с фильтрами.
-- **Принимает:** `asset_code`, `asset_type`, `expiration_date`, `series_type` (`'W'|'M'|'Q'`), `strike`, `option_type` (`'call'|'put'`).
+- **Принимает:** `asset_code`, `expiration_date` (**обязательно**, `'YYYY-MM-DD'`, взять из `option_calc_series`), `asset_type`, `series_type` (`'W'|'M'|'Q'`), `strike`, `option_type` (`'call'|'put'`), `limit` (по умолч. 50, макс. 200).
 - **Возвращает:** `[{secid, asset_code, asset_type, futures_code, expiration_date, series_type, strike, option_type}]`.
-- **Пример:** `option_calc_options('Si', option_type='call', strike=84000)` → все call-опционы Si со страйком 84000.
+- **Пример:** `option_calc_options('Si', '2026-09-17', option_type='call', strike=84000)` → call-опцион Si со страйком 84000 на 17.09.2026.
 
 ### 🟢 `option_calc_option_brief(asset_code, secid, asset_type=None, days_until_expiring=None, underlying_price=None, volatility=None)`
 Сводка по опциону: Greeks, теор. цена, IV.
