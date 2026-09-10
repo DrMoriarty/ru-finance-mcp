@@ -24,7 +24,7 @@ from mcp.server.streamable_http import EventCallback, EventId, EventMessage, Eve
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon, ToolAnnotations
 
-from . import bonds, cbr, fundamental, moex, portfolio, raexpert, rate, smartlab, vsezpif
+from . import bonds, cbr, fundamental, moex, option_calc, portfolio, raexpert, rate, smartlab, vsezpif
 
 # ─────────────────────────── Tool Groups & Roles ───────────────────────────
 # Каждый инструмент принадлежит ровно одной группе. Роль = набор групп.
@@ -99,6 +99,16 @@ GROUPS: dict[str, set[str]] = {
         "portfolio_snapshot", "portfolio_rate_whatif",
         "portfolio_income_calendar", "portfolio_movers",
     },
+    # Опционный калькулятор MOEX: доски, Greeks, волатильность, стратегии
+    "option_calc": {
+        "option_calc_assets", "option_calc_asset_detail",
+        "option_calc_futures", "option_calc_options", "option_calc_option_brief",
+        "option_calc_series", "option_calc_series_detail",
+        "option_calc_series_options", "option_calc_optionboard",
+        "option_calc_volatility_graph",
+        "option_calc_portfolio", "option_calc_portfolio_graph",
+        "option_calc_initial_margin",
+    },
 }
 
 # Роли: каждая — набор групп, подключаемых агенту.
@@ -119,7 +129,7 @@ ROLES: dict[str, set[str]] = {
     },
     # Таймер: определение оптимальной точки входа/выхода
     "timer": {
-        "core_lookup", "price_history", "technical", "derivatives",
+        "core_lookup", "price_history", "technical", "derivatives", "option_calc",
     },
     # Макро-трекер: мониторинг ставок и макроэкономических трендов
     "macrotracker": {
@@ -127,11 +137,11 @@ ROLES: dict[str, set[str]] = {
     },
     # Риск-менеджер: контроль рисков позиций и портфеля
     "risk_manager": {
-        "core_lookup", "risk", "screening", "macro", "technical", "fixed_income", "derivatives",
+        "core_lookup", "risk", "screening", "macro", "technical", "fixed_income", "derivatives", "option_calc",
     },
     # Специалист по инструментам: ETF, производные
     "instrument_specialist": {
-        "core_lookup", "etf", "derivatives", "technical", "price_history",
+        "core_lookup", "etf", "derivatives", "technical", "price_history", "option_calc",
     },
     # Портфельный менеджер: обслуживание и мониторинг портфеля
     "portfolio_manager": {
@@ -1725,6 +1735,247 @@ def portfolio_movers(assets: str) -> dict:
     Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
     return portfolio.movers(assets)
+
+
+# ─────────────────────────── MOEX Option Calculator ───────────────────────────
+@_tool()
+def option_calc_assets(
+    asset_type: str | None = None,
+    asset_subtype: str | None = None,
+    query: str | None = None,
+) -> list[dict]:
+    """Underlying assets for MOEX options calculator.
+
+    Args: asset_type ('commodity'|'currency'|'futures'|'index'|'share'),
+    asset_subtype ('commodity'|'currency'|'index'|'share', for futures),
+    query — filter by name (max 8 chars).
+    Returns [{asset_code, title, asset_type, asset_subtype}].
+    """
+    return option_calc.assets(asset_type=asset_type, asset_subtype=asset_subtype, query=query)
+
+
+@_tool()
+def option_calc_asset_detail(asset_code: str, asset_type: str | None = None) -> dict:
+    """Detail for a single underlying asset in options calculator.
+
+    Args: asset_code — trading code ('Si', 'GAZR', 'SBRF', 'RTS').
+    Returns: {asset_code, title, asset_type, asset_subtype}.
+    """
+    return option_calc.asset_detail(asset_code, asset_type=asset_type)
+
+
+@_tool()
+def option_calc_futures(asset_code: str, expiration_date: str | None = None) -> list[dict]:
+    """Futures contracts available for the underlying asset.
+
+    Args: asset_code — trading code of underlying ('Si', 'GAZR'),
+    expiration_date — optional filter 'YYYY-MM-DD'.
+    Returns [{futures_code, asset_code, asset_type, expiration_date}].
+    """
+    return option_calc.futures_list(asset_code, expiration_date=expiration_date)
+
+
+@_tool()
+def option_calc_options(
+    asset_code: str,
+    asset_type: str | None = None,
+    expiration_date: str | None = None,
+    series_type: str | None = None,
+    strike: float | None = None,
+    option_type: str | None = None,
+) -> list[dict]:
+    """Options for underlying asset with filters.
+
+    Args: asset_code, asset_type, expiration_date ('YYYY-MM-DD'),
+    series_type ('W'|'M'|'Q'), strike, option_type ('call'|'put').
+    Returns [{secid, asset_code, asset_type, futures_code, expiration_date,
+    series_type, strike, option_type}].
+    """
+    return option_calc.options_list(
+        asset_code, asset_type=asset_type, expiration_date=expiration_date,
+        series_type=series_type, strike=strike, option_type=option_type,
+    )
+
+
+@_tool()
+def option_calc_option_brief(
+    asset_code: str,
+    secid: str,
+    asset_type: str | None = None,
+    days_until_expiring: int | None = None,
+    underlying_price: float | None = None,
+    volatility: float | None = None,
+) -> dict:
+    """Brief summary for a single option: Greeks, theor price, IV.
+
+    Args: asset_code — underlying ('Si'), secid — option code ('Si70000BI6A'),
+    asset_type, days_until_expiring (override), underlying_price (RUB, override),
+    volatility (%, override implied vol).
+    Returns: {secid, delta, gamma, vega, theta, rho, theorprice, volatility,
+    underlying_price, days_until_expiring, fee, expiring_date, ...}.
+    """
+    return option_calc.option_brief(
+        asset_code, secid, asset_type=asset_type,
+        days_until_expiring=days_until_expiring,
+        underlying_price=underlying_price, volatility=volatility,
+    )
+
+
+@_tool()
+def option_calc_series(asset_code: str, asset_type: str | None = None) -> list[dict]:
+    """Option series (expiration cycles) for underlying asset.
+
+    Args: asset_code — underlying ('Si', 'RTS').
+    Returns [{optionseries_code, asset_code, asset_type, futures_code,
+    series_type, expiration_date, central_strike, call: {...}, put: {...}, updatetime}].
+    """
+    return option_calc.option_series_list(asset_code, asset_type=asset_type)
+
+
+@_tool()
+def option_calc_series_detail(
+    asset_code: str,
+    optionseries_code: str,
+    asset_type: str | None = None,
+) -> dict:
+    """Detail for a single option series.
+
+    Args: asset_code, optionseries_code (from option_calc_series).
+    Returns: {optionseries_code, asset_code, asset_type, futures_code,
+    series_type, expiration_date, central_strike, call: {...}, put: {...}, updatetime}.
+    """
+    return option_calc.option_series_detail(
+        asset_code, optionseries_code, asset_type=asset_type,
+    )
+
+
+@_tool()
+def option_calc_series_options(
+    asset_code: str,
+    optionseries_code: str,
+    asset_type: str | None = None,
+    strike: int | None = None,
+    option_type: str | None = None,
+) -> list[dict]:
+    """Options in a specific series.
+
+    Args: asset_code, optionseries_code, asset_type,
+    strike (filter), option_type ('call'|'put').
+    Returns [{secid, asset_code, asset_type, futures_code, expiration_date,
+    series_type, strike, option_type}].
+    """
+    return option_calc.series_options(
+        asset_code, optionseries_code, asset_type=asset_type,
+        strike=strike, option_type=option_type,
+    )
+
+
+@_tool()
+def option_calc_optionboard(
+    asset_code: str,
+    optionseries_code: str,
+    asset_type: str | None = None,
+    rows: int | None = None,
+) -> dict:
+    """Option board: strikes with Greeks, IV, bid/ask, theor price.
+
+    Args: asset_code, optionseries_code, asset_type,
+    rows — number of strikes from central strike (default: all).
+    Returns: {call: [{secid, strike, delta, gamma, vega, theta, rho,
+    theorprice, last, bid, offer, volatility, intrinsic_value, timed_value, ...}],
+    put: [same]}.
+    """
+    return option_calc.option_board(
+        asset_code, optionseries_code, asset_type=asset_type, rows=rows,
+    )
+
+
+@_tool()
+def option_calc_volatility_graph(
+    asset_code: str,
+    optionseries_code: str,
+    asset_type: str | None = None,
+) -> list[dict]:
+    """Volatility smile (strike vs implied volatility) for a series.
+
+    Args: asset_code, optionseries_code, asset_type.
+    Returns [{strike, volatility}].
+    """
+    return option_calc.volatility_graph(
+        asset_code, optionseries_code, asset_type=asset_type,
+    )
+
+
+@_tool()
+def option_calc_portfolio(
+    asset_code: str,
+    positions: list[dict],
+    asset_type: str | None = None,
+    delta_sigma: float | None = None,
+    date_of_calculation: str | None = None,
+) -> dict:
+    """Calculate option portfolio: aggregated Greeks, P&L, initial margin.
+
+    Args: asset_code — underlying ('Si'), positions — list of positions
+    [{secid, quantity, price?, volatility?, netted_im?}].
+    secid can be futures or option code. quantity: positive=buy, negative=sell.
+    asset_type — optional, delta_sigma — vol shift (%) for what-if,
+    date_of_calculation — 'YYYY-MM-DD' for what-if.
+    Returns: {positions: [{secid, delta, gamma, vega, theta, rho,
+    profit_and_loss, profit_and_loss_rub, fee, theorprice, ...}],
+    total: {delta, gamma, vega, theta, rho, profit_and_loss, fee},
+    initial_margin}.
+    """
+    what_if = None
+    if delta_sigma is not None or date_of_calculation is not None:
+        what_if = {}
+        if delta_sigma is not None:
+            what_if["delta_sigma"] = delta_sigma
+        if date_of_calculation is not None:
+            what_if["date_of_calculation"] = date_of_calculation
+    return option_calc.calculate_portfolio(
+        asset_code, positions, asset_type=asset_type, what_if=what_if,
+    )
+
+
+@_tool()
+def option_calc_portfolio_graph(
+    asset_code: str,
+    positions: list[dict],
+    indicator: str,
+    asset_type: str | None = None,
+    delta_sigma: float | None = None,
+    date_of_calculation: str | None = None,
+) -> dict:
+    """Portfolio graph: P&L or Greeks vs underlying price.
+
+    Args: asset_code, positions (same as option_calc_portfolio),
+    indicator — 'profit_and_loss'|'delta'|'gamma'|'vega'|'theta'|'rho',
+    asset_type, delta_sigma, date_of_calculation.
+    Returns: {now: [{underlying_price, value}], on_expiration: [...],
+    on_what_if: [...]}.
+    """
+    what_if = None
+    if delta_sigma is not None or date_of_calculation is not None:
+        what_if = {}
+        if delta_sigma is not None:
+            what_if["delta_sigma"] = delta_sigma
+        if date_of_calculation is not None:
+            what_if["date_of_calculation"] = date_of_calculation
+    return option_calc.portfolio_graph(
+        asset_code, positions, indicator, asset_type=asset_type, what_if=what_if,
+    )
+
+
+@_tool()
+def option_calc_initial_margin(positions: list[dict]) -> dict:
+    """Calculate initial margin for a set of futures/options positions.
+
+    Args: positions — list of {secid, quantity, price, netted_im?}.
+    secid — any futures or option code from FORTS (cross-asset OK).
+    Returns: {initial_margin: float} (RUB).
+    """
+    return {"initial_margin": option_calc.initial_margin(positions)}
 
 
 # ─────────────────────────── Resources (reference data) ───────────────────────────

@@ -1,6 +1,6 @@
 # Справочник инструментов `ru-finance`
 
-76 ручек. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
+94 ручки. Полное описание сигнатур, входов/выходов и примеров. Краткий обзор — в
 [README](../README.md). Принципы использования для ИИ-агента — в [AGENTS.md](../AGENTS.md).
 
 Все ручки **generic**: конкретные бумаги и портфель передаются параметрами, в коде
@@ -702,6 +702,89 @@ refresh date: 2026-06-27        # опц.
 - **Возвращает:** `{day_losers, day_gainers, worst_vs_cost, best_vs_cost}` (топ-3 в каждую сторону, по дневному изменению и по P&L против цены покупки).
 
 ---
+
+## Опционный калькулятор MOEX
+
+API: `iss.moex.com/iss/apps/option-calc/v1`. Расчёт Greeks, IV, волатильных
+кривых, опционных стратегий и гарантийного обеспечения по данным FORTS.
+
+### 🟢 `option_calc_assets(asset_type=None, asset_subtype=None, query=None)`
+Список базовых активов опционного калькулятора.
+- **Принимает:** `asset_type` (`'commodity'|'currency'|'futures'|'index'|'share'`), `asset_subtype` (`'commodity'|'currency'|'index'|'share'`, для фьючерсов), `query` — фильтр по названию (макс. 8 символов).
+- **Возвращает:** `[{asset_code, title, asset_type, asset_subtype}]`.
+- **Пример:** `option_calc_assets(asset_type='index')` → `[{asset_code:"IMOEX", title:"IMOEX (Индекс МосБиржи)", ...}]`.
+
+### 🟢 `option_calc_asset_detail(asset_code, asset_type=None)`
+Описание базового актива.
+- **Принимает:** `asset_code` (`'Si'`, `'GAZR'`, `'RTS'`), `asset_type`.
+- **Возвращает:** `{asset_code, title, asset_type, asset_subtype}`.
+
+### 🟢 `option_calc_futures(asset_code, expiration_date=None)`
+Фьючерсы для базового актива.
+- **Принимает:** `asset_code`, `expiration_date` (`'YYYY-MM-DD'`, опц.).
+- **Возвращает:** `[{futures_code, asset_code, asset_type, expiration_date}]`.
+- **Пример:** `option_calc_futures('Si')` → `[{futures_code:"SIU6", expiration_date:"2026-09-18", ...}, ...]`.
+
+### 🟢 `option_calc_options(asset_code, asset_type=None, expiration_date=None, series_type=None, strike=None, option_type=None)`
+Опционы на базовый актив с фильтрами.
+- **Принимает:** `asset_code`, `asset_type`, `expiration_date`, `series_type` (`'W'|'M'|'Q'`), `strike`, `option_type` (`'call'|'put'`).
+- **Возвращает:** `[{secid, asset_code, asset_type, futures_code, expiration_date, series_type, strike, option_type}]`.
+- **Пример:** `option_calc_options('Si', option_type='call', strike=84000)` → все call-опционы Si со страйком 84000.
+
+### 🟢 `option_calc_option_brief(asset_code, secid, asset_type=None, days_until_expiring=None, underlying_price=None, volatility=None)`
+Сводка по опциону: Greeks, теор. цена, IV.
+- **Принимает:** `asset_code` (`'Si'`), `secid` (`'Si70000BI6A'`), `asset_type`, `days_until_expiring` (override дней до экспирации), `underlying_price` (override цены БА, ₽), `volatility` (override IV, %).
+- **Возвращает:** `{secid, delta, gamma, vega, theta, rho, theorprice, volatility, underlying_price, days_until_expiring, fee, expiring_date, lastprice, settleprice, underlying_asset, underlying_type}`.
+- **Пример:** `option_calc_option_brief('Si', 'Si84000BC6A')` → `{secid:"Si84000BC6A", delta:-0.42, gamma:0.00003, theta:-15.2, volatility:22.5, theorprice:1850.0, ...}`.
+- **What-if:** передайте `underlying_price` и/или `volatility` для расчёта при других условиях.
+
+### 🟢 `option_calc_series(asset_code, asset_type=None)`
+Серии опционов (циклы экспираций) для базового актива.
+- **Принимает:** `asset_code` (`'Si'`, `'RTS'`).
+- **Возвращает:** `[{optionseries_code, asset_code, asset_type, futures_code, series_type, expiration_date, central_strike, call: {volume_rub, volume_contracts, openposition, oichange}, put: {...}, updatetime}]`.
+- **Пример:** `option_calc_series('Si')` → `[{optionseries_code:"SI-9.26M100926XA", expiration_date:"2026-09-10", central_strike:84000, ...}, ...]`.
+
+### 🟢 `option_calc_series_detail(asset_code, optionseries_code, asset_type=None)`
+Описание одной серии опционов.
+- **Возвращает:** то же, что `option_calc_series`, но для одной серии.
+
+### 🟢 `option_calc_series_options(asset_code, optionseries_code, asset_type=None, strike=None, option_type=None)`
+Опционы в конкретной серии.
+- **Принимает:** `asset_code`, `optionseries_code` (из `option_calc_series`), `strike` (фильтр), `option_type`.
+- **Возвращает:** `[{secid, asset_code, asset_type, futures_code, expiration_date, series_type, strike, option_type}]`.
+
+### 🟢 `option_calc_optionboard(asset_code, optionseries_code, asset_type=None, rows=None)`
+Доска опционов: страйки с Greeks, IV, bid/ask, теор. цена.
+- **Принимает:** `asset_code`, `optionseries_code`, `asset_type`, `rows` — кол-во страйков от центрального (опц.).
+- **Возвращает:** `{call: [{secid, strike, delta, gamma, vega, theta, rho, theorprice, theorprice_rub, last, bid, offer, volatility, intrinsic_value, timed_value, numtrades}], put: [same]}`.
+- **Пример:** `option_calc_optionboard('Si', 'SI-9.26M100926XA', rows=5)` → 5 страйков по каждой стороне.
+
+### 🟢 `option_calc_volatility_graph(asset_code, optionseries_code, asset_type=None)`
+График волатильности (smile) для серии опционов.
+- **Возвращает:** `[{strike, volatility}]` — кривая implied volatility по страйкам.
+- **Пример:** `option_calc_volatility_graph('Si', 'SI-9.26M100926XA')` → smile с U-образной формой.
+
+### 🧮 `option_calc_portfolio(asset_code, positions, asset_type=None, delta_sigma=None, date_of_calculation=None)`
+Расчёт опционного портфеля: агрегированные Greeks, P&L, гарантийное обеспечение.
+- **Принимает:** `asset_code` (`'Si'`), `positions` — список позиций `[{secid, quantity, price?, volatility?, netted_im?}]`. `secid` — код фьючерса или опциона. `quantity`: положительное = покупка, отрицательное = продажа. `asset_type`, `delta_sigma` (сдвиг волатильности, %, для what-if), `date_of_calculation` (`'YYYY-MM-DD'`, для what-if).
+- **Возвращает:** `{positions: [{secid, type, quantity, price, delta, gamma, vega, theta, rho, profit_and_loss, profit_and_loss_rub, fee, theorprice, strike, volatility, expiration_date, days_until_expiring, expired}], total: {delta, gamma, vega, theta, rho, profit_and_loss, profit_and_loss_rub, fee}, initial_margin}`.
+- **Пример:** `option_calc_portfolio('Si', [{secid:'Si84000BC6A', quantity:-10}, {secid:'SIU6', quantity:5}])` → совокупный портфель с Greeks.
+- **What-if:** `delta_sigma=-5` — что будет, если IV упадёт на 5%.
+
+### 🧮 `option_calc_portfolio_graph(asset_code, positions, indicator, asset_type=None, delta_sigma=None, date_of_calculation=None)`
+График P&L или Greeks в зависимости от цены базового актива.
+- **Принимает:** `asset_code`, `positions` (как в `option_calc_portfolio`), `indicator` — `'profit_and_loss'|'delta'|'gamma'|'vega'|'theta'|'rho'`, остальные параметры опциональны.
+- **Возвращает:** `{now: [{underlying_price, value}], on_expiration: [{underlying_price, value}], on_what_if: [{underlying_price, value}]}`.
+  - `now` — текущий момент (с текущей IV);
+  - `on_expiration` — на дату экспирации;
+  - `on_what_if` — при заданном сдвиге IV / дате (если переданы).
+- **Пример:** `option_calc_portfolio_graph('Si', [{secid:'Si84000BC6A', quantity:-10}], 'profit_and_loss')` → точки для построения P&L-графика стратегии.
+
+### 🧮 `option_calc_initial_margin(positions)`
+Гарантийное обеспечение для произвольного набора позиций (кросс-БА).
+- **Принимает:** `positions` — `[{secid, quantity, price, netted_im?}]`. `secid` — любой код фьючерса/опциона FORTS. `netted_im` — неттирование ГО (по умолч. `true`).
+- **Возвращает:** `{initial_margin: float}` (₽).
+- **Пример:** `option_calc_initial_margin([{secid:'SIU6', quantity:1, price:84000}])` → `{"initial_margin":13260.16}`.
 
 ## Технические заметки
 
