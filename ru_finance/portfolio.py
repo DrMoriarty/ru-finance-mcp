@@ -119,61 +119,71 @@ _CLASS_RU = {
 
 
 def _enrich(pos: dict) -> dict:
-    """Подтянуть живую цену и метрики для позиции."""
+    """Подтянуть живую цену и метрики для позиции.
+    
+    При любой ошибке (сеть, ненайденный тикер и т.д.) возвращает позицию
+    с name/search_key, но с error и без price/value.
+    """
     p = dict(pos)
+    p["error"] = None
     # Определяем тип бумаги: если group==stock_bonds → облигация, иначе фонд/акция.
     is_bond = False
     info = None
     try:
         info = moex.resolve(pos["search_key"])
         is_bond = str(info.get("group", "")).endswith("_bonds")
-    except ValueError:
-        pass
-    if is_bond:
-        b = moex.bond(pos["search_key"])
-        face = b.get("face_value") or 1000
-        price_pct = b.get("price_pct")
-        p.update({
-            "secid": b["secid"], "shortname": b["shortname"], "type": b["type"],
-            "price": price_pct, "unit": "%", "face": face,
-            "ytm": b.get("ytm"), "duration_years": b.get("duration_years"),
-            "mod_duration_years": b.get("mod_duration_years"),
-            "coupon_pct": b.get("coupon_pct"),
-            "annual_coupon_per_bond": b.get("annual_coupon_per_bond"),
-            "maturity": b.get("maturity"), "change_pct": b.get("change_pct"),
-        })
-        p["value"] = pos["qty"] * face * price_pct / 100 if price_pct else None
-        p["cost"] = pos["qty"] * face * pos["buy_price"] / 100 if pos["buy_price"] else None
-        # Спред к G-кривой
-        if b.get("ytm") and b.get("duration_years"):
-            try:
-                cy = rate.curve_yield(b["duration_years"])
-                p["spread_to_curve_pp"] = round(b["ytm"] - cy.get("yield", 0), 2)
-            except Exception:  # noqa: BLE001
-                pass
-    else:
-        q = moex.quote(pos["search_key"])
-        price = q.get("price")
-        p.update({
-            "secid": q["secid"], "shortname": q["shortname"],
-            "type": info.get("type") if info else None,
-            "price": price, "unit": "₽", "change_pct": q.get("change_pct"),
-        })
-        p["value"] = pos["qty"] * price if price else None
-        p["cost"] = pos["qty"] * pos["buy_price"] if pos["buy_price"] else None
-        # Дивидендная доходность
-        ticker = pos["search_key"]
-        if price:
-            try:
-                divs = smartlab.get_dividend_history(ticker)
-                if divs:
-                    last_div = divs[-1].get("dividend_rub")
-                    if last_div:
-                        p["dividend_rub"] = last_div
-                        p["div_yield_pct"] = round(last_div / price * 100, 2)
-                        p["annual_dividend_per_position"] = round(pos["qty"] * last_div, 2)
-            except Exception:  # noqa: BLE001
-                pass
+    except Exception as exc:  # noqa: BLE001
+        p["error"] = f"resolve: {exc}"
+        p["is_bond"] = False
+        return p
+    try:
+        if is_bond:
+            b = moex.bond(pos["search_key"])
+            face = b.get("face_value") or 1000
+            price_pct = b.get("price_pct")
+            p.update({
+                "secid": b["secid"], "shortname": b["shortname"], "type": b["type"],
+                "price": price_pct, "unit": "%", "face": face,
+                "ytm": b.get("ytm"), "duration_years": b.get("duration_years"),
+                "mod_duration_years": b.get("mod_duration_years"),
+                "coupon_pct": b.get("coupon_pct"),
+                "annual_coupon_per_bond": b.get("annual_coupon_per_bond"),
+                "maturity": b.get("maturity"), "change_pct": b.get("change_pct"),
+            })
+            p["value"] = pos["qty"] * face * price_pct / 100 if price_pct else None
+            p["cost"] = pos["qty"] * face * pos["buy_price"] / 100 if pos["buy_price"] else None
+            # Спред к G-кривой
+            if b.get("ytm") and b.get("duration_years"):
+                try:
+                    cy = rate.curve_yield(b["duration_years"])
+                    p["spread_to_curve_pp"] = round(b["ytm"] - cy.get("yield", 0), 2)
+                except Exception:  # noqa: BLE001
+                    pass
+        else:
+            q = moex.quote(pos["search_key"])
+            price = q.get("price")
+            p.update({
+                "secid": q["secid"], "shortname": q["shortname"],
+                "type": info.get("type") if info else None,
+                "price": price, "unit": "₽", "change_pct": q.get("change_pct"),
+            })
+            p["value"] = pos["qty"] * price if price else None
+            p["cost"] = pos["qty"] * pos["buy_price"] if pos["buy_price"] else None
+            # Дивидендная доходность
+            ticker = pos["search_key"]
+            if price:
+                try:
+                    divs = smartlab.get_dividend_history(ticker)
+                    if divs:
+                        last_div = divs[-1].get("dividend_rub")
+                        if last_div:
+                            p["dividend_rub"] = last_div
+                            p["div_yield_pct"] = round(last_div / price * 100, 2)
+                            p["annual_dividend_per_position"] = round(pos["qty"] * last_div, 2)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception as exc:  # noqa: BLE001
+        p["error"] = f"quote/bond: {exc}"
     p["is_bond"] = is_bond
     if p.get("value") and p.get("cost"):
         p["pnl"] = round(p["value"] - p["cost"], 2)
@@ -247,6 +257,7 @@ def snapshot(assets_text: str, inflation_pct: float | None = None) -> dict:
             "ytm": p.get("ytm"), "duration_years": p.get("duration_years"),
             "spread_to_curve_pp": p.get("spread_to_curve_pp"),
             "div_yield_pct": p.get("div_yield_pct"),
+            "error": p.get("error"),
         } for p in positions],
         "allocation": allocation,
         "rate_risk": rate_risk,

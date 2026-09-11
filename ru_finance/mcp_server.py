@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 from collections import defaultdict
@@ -1700,12 +1701,12 @@ async def portfolio_snapshot(assets: str, ctx: Context) -> dict:
     """
     await ctx.report_progress(0, 3, "Fetching inflation data")
     try:
-        infl_data = cbr.inflation(tail=1)
+        infl_data = await asyncio.to_thread(cbr.inflation, tail=1)
         inflation_pct = infl_data.get("latest_inflation")
     except Exception:  # noqa: BLE001
         inflation_pct = None
     await ctx.report_progress(1, 3, "Building portfolio snapshot")
-    return portfolio.snapshot(assets, inflation_pct=inflation_pct)
+    return await asyncio.to_thread(portfolio.snapshot, assets, inflation_pct=inflation_pct)
 
 
 @_tool()
@@ -1716,7 +1717,7 @@ async def portfolio_rate_whatif(delta_pp: float, assets: str, ctx: Context) -> d
     Returns: value change (RUB and %) + bond-by-bond breakdown.
     """
     await ctx.report_progress(0, 2, "Computing rate scenario")
-    return portfolio.rate_whatif(delta_pp, assets)
+    return await asyncio.to_thread(portfolio.rate_whatif, delta_pp, assets)
 
 
 @_tool()
@@ -1726,20 +1727,20 @@ async def portfolio_income_calendar(assets: str, ctx: Context) -> dict:
     Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
     await ctx.report_progress(0, 2, "Fetching income calendar")
-    return portfolio.income_calendar(assets)
+    return await asyncio.to_thread(portfolio.income_calendar, assets)
 
 
 @_tool()
-def portfolio_movers(assets: str) -> dict:
+async def portfolio_movers(assets: str) -> dict:
     """Top gainers/losers: daily change and P&L vs purchase price (top-3 each way).
 
     Args: assets — markdown portfolio (same as portfolio_snapshot).
     """
-    return portfolio.movers(assets)
+    return await asyncio.to_thread(portfolio.movers, assets)
 
 
 @_tool()
-def portfolio_alpha_beta(
+async def portfolio_alpha_beta(
     assets: str,
     benchmark: str = "IMOEX",
     days: int = 252,
@@ -1759,7 +1760,7 @@ def portfolio_alpha_beta(
         portfolio/benchmark return and volatility (annualised), sharpe,
         weights, skipped positions.
     """
-    return portfolio.alpha_beta(assets, benchmark=benchmark, days=days)
+    return await asyncio.to_thread(portfolio.alpha_beta, assets, benchmark=benchmark, days=days)
 
 
 # ─────────────────────────── MOEX Option Calculator ───────────────────────────
