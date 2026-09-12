@@ -20,7 +20,7 @@ def _ser(s: pd.Series, tail: int) -> dict:
     s = s.dropna()
     if s.empty:
         return {"latest": None, "latest_date": None, "series": []}
-    series = [{"date": str(getattr(i, "date", lambda: i)()), "value": float(v)}
+    series = [{"date": str(getattr(i, "date", lambda x=i: x)()), "value": float(v)}
               for i, v in s.tail(tail).items()]
     return {"latest": float(s.iloc[-1]),
             "latest_date": str(getattr(s.index[-1], "date", lambda: s.index[-1])()),
@@ -29,7 +29,7 @@ def _ser(s: pd.Series, tail: int) -> dict:
 
 def _df(df: pd.DataFrame, tail: int) -> dict:
     df = df.tail(tail).copy()
-    df.index = [str(getattr(i, "date", lambda: i)()) for i in df.index]
+    df.index = [str(getattr(i, "date", lambda x=i: x)()) for i in df.index]
     df.columns = [str(c) for c in df.columns]
     latest = {k: v for k, v in df.iloc[-1].to_dict().items() if pd.notna(v)} if len(df) else {}
     return {"latest": latest,

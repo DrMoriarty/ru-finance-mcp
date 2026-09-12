@@ -40,7 +40,7 @@ def exec_template(template_id: int, vars: dict | None = None,
         try:
             url = c.render_url(template_id, **vars)
             return c.execute(url, **params).raw
-        except Exception as e:  # noqa: BLE001 — флаки-сеть, ретраим что угодно
+        except Exception as e:
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -57,7 +57,7 @@ def raw_get(path: str, params: dict | None = None, retries: int = 4) -> dict:
             r = requests.get(url, params=params, timeout=15)
             r.raise_for_status()
             return r.json()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -67,7 +67,7 @@ def records(raw: dict, block: str) -> list[dict]:
     """ISS-блок {columns, data} -> список словарей-строк."""
     b = raw.get(block) or {}
     cols = b.get("columns") or []
-    return [dict(zip(cols, row)) for row in (b.get("data") or [])]
+    return [dict(zip(cols, row, strict=False)) for row in (b.get("data") or [])]
 
 
 def first(*vals):

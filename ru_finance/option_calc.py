@@ -35,7 +35,7 @@ def _extract_error(r: requests.Response) -> str:
                 return f"{status}: {'; '.join(str(d) for d in detail)}"
             if isinstance(detail, str):
                 return f"{status}: {detail}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     text = r.text[:200].strip()
     return f"{status}: {text}" if text else f"{status} error"
@@ -53,7 +53,7 @@ def _get(path: str, params: dict | None = None, retries: int = 4) -> dict | list
             return r.json()
         except requests.HTTPError:
             raise  # no retry on HTTP errors
-        except Exception as e:  # noqa: BLE001 — network errors, retry
+        except Exception as e:
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -71,7 +71,7 @@ def _post(path: str, json_body: dict, retries: int = 4) -> dict:
             return r.json()
         except requests.HTTPError:
             raise  # no retry on HTTP errors
-        except Exception as e:  # noqa: BLE001 — network errors, retry
+        except Exception as e:
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]

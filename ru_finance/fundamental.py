@@ -5,12 +5,10 @@
 """
 from __future__ import annotations
 
-import math
 import statistics
 from typing import Any
 
 from . import raexpert, smartlab
-
 
 # ─────────────────────── helpers ───────────────────────
 
@@ -90,8 +88,6 @@ def f_score(ticker: str, *, standard: str = "MSFO") -> dict[str, Any]:
     fin = smartlab.get_company_financials(ticker, period="y", standard=standard)
     if not fin or not fin.get("data"):
         return {"ticker": ticker.upper(), "error": "No financial data"}
-
-    data = fin["data"]
 
     def _latest_a(f: str) -> float | None:
         v = _latest(fin, f)
@@ -206,7 +202,6 @@ def z_score(ticker: str, *, standard: str = "MSFO") -> dict[str, Any]:
     if not fin or not fin.get("data"):
         return {"ticker": ticker.upper(), "error": "No financial data"}
 
-    data = fin["data"]
     ticker_name = fin.get("name", "")
 
     def _first(*fields: str) -> float | None:
@@ -223,7 +218,6 @@ def z_score(ticker: str, *, standard: str = "MSFO") -> dict[str, Any]:
     oi = _first("operating_income", "net_operating_income")
     ebitda = _first("ebitda")
     market_cap = _first("market_cap")
-    revenue = _first("revenue")
 
     if not assets or assets <= 0:
         return {"ticker": ticker.upper(), "name": ticker_name, "error": "No assets data"}
@@ -326,7 +320,8 @@ def peer_comparison(ticker: str, limit: int = 20) -> dict[str, Any]:
         val = target.get(m)
         if val is None:
             continue
-        vals = [(p.get("ticker"), p.get(m)) for p in peers if p.get(m) is not None]
+        vals: list[tuple[str, float]] = [(str(p.get("ticker")), float(p.get(m)))  # type: ignore[arg-type]
+                                         for p in peers if p.get(m) is not None]
         if not vals:
             continue
         # Сортировка: для yield/payout/margin/revenue/ниcome — больше лучше;
@@ -436,12 +431,9 @@ def growth_analysis(ticker: str, *, standard: str = "MSFO") -> dict[str, Any]:
     if not fin or not fin.get("data"):
         return {"ticker": ticker.upper(), "error": "No financial data"}
 
-    data = fin["data"]
     years = _years_sorted(fin)
     if len(years) < 2:
         return {"ticker": ticker.upper(), "name": fin.get("name", ""), "error": "Need at least 2 years"}
-
-    n_years = len(years) - 1
 
     def _cagr_field(field: str) -> tuple[float | None, dict]:
         vals = _all_values(fin, field)
@@ -625,7 +617,7 @@ def company_report(ticker: str, *, standard: str = "MSFO") -> dict[str, Any]:
     # Рейтинг
     rating_info: list[dict] | None = None
     try:
-        ratings = raexpert.get_rating(t)
+        ratings = raexpert.rating_search(t)
         if ratings:
             rating_info = ratings[:3]
     except Exception:

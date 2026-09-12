@@ -28,7 +28,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
-from . import bonds, cbr, moex, rate, smartlab
+from . import cbr, moex, rate, smartlab
 
 _LINE = re.compile(r"^-\s*(?P<name>.+?)\s*:\s*(?P<qty>[\d ]+)\s*шт\.?\s*\((?P<prices>[^)]*)\)")
 _TICKER = re.compile(r"\(([A-Z0-9]{1,12})\)\s*$")
@@ -120,7 +120,7 @@ _CLASS_RU = {
 
 def _enrich(pos: dict) -> dict:
     """Подтянуть живую цену и метрики для позиции.
-    
+
     При любой ошибке (сеть, ненайденный тикер и т.д.) возвращает позицию
     с name/search_key, но с error и без price/value.
     """
@@ -132,7 +132,7 @@ def _enrich(pos: dict) -> dict:
     try:
         info = moex.resolve(pos["search_key"])
         is_bond = str(info.get("group", "")).endswith("_bonds")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         p["error"] = f"resolve: {exc}"
         p["is_bond"] = False
         return p
@@ -157,7 +157,7 @@ def _enrich(pos: dict) -> dict:
                 try:
                     cy = rate.curve_yield(b["duration_years"])
                     p["spread_to_curve_pp"] = round(b["ytm"] - cy.get("yield", 0), 2)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
         else:
             q = moex.quote(pos["search_key"])
@@ -180,9 +180,9 @@ def _enrich(pos: dict) -> dict:
                             p["dividend_rub"] = last_div
                             p["div_yield_pct"] = round(last_div / price * 100, 2)
                             p["annual_dividend_per_position"] = round(pos["qty"] * last_div, 2)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         p["error"] = f"quote/bond: {exc}"
     p["is_bond"] = is_bond
     if p.get("value") and p.get("cost"):
@@ -313,7 +313,7 @@ def income_calendar(assets_text: str) -> dict:
         try:
             ri = moex.resolve(pos["search_key"])
             pos_is_bond = str(ri.get("group", "")).endswith("_bonds")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if pos_is_bond:
             b = moex.bond(pos["search_key"])
@@ -327,7 +327,7 @@ def income_calendar(assets_text: str) -> dict:
             ticker = pos["search_key"]
             try:
                 divs = smartlab.get_dividend_history(ticker)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 divs = []
             if divs:
                 last = divs[-1]

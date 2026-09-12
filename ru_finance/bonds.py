@@ -302,7 +302,7 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
 
     dur = duration_years or 1.0
 
-    twists = [
+    twists: list[dict[str, float | str]] = [
         {"name": "steepener", "delta_short": -1.0, "delta_long": 1.0},
         {"name": "flattener", "delta_short": 1.0, "delta_long": -1.0},
         {"name": "twist_short", "delta_short": -2.0, "delta_long": 1.0},
@@ -312,7 +312,7 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
     for tw in twists:
         # Интерполяция: бумага с dur=0 двигается как короткий конец, dur>5 — как длинный
         weight_long = min(1.0, dur / 5.0)
-        delta = tw["delta_short"] * (1 - weight_long) + tw["delta_long"] * weight_long
+        delta = float(tw["delta_short"]) * (1 - weight_long) + float(tw["delta_long"]) * weight_long
         d1 = dirty_price(t1, mat, coupon_rate, ytm + delta, face, freq, coupon_schedule)
         tr = (d1 + total_coupon - d0) / d0 * 100
         out.append({
@@ -320,10 +320,10 @@ def twist_scenarios(maturity, coupon_rate: float, ytm: float, duration_years: fl
             "delta_pp": round(delta, 2),
             "total_return_pct": round(tr, 1),
             "description": (
-                f"short -1 pp, long +1 pp" if tw["name"] == "steepener"
-                else f"short +1 pp, long -1 pp" if tw["name"] == "flattener"
-                else f"short -2 pp, long +1 pp" if tw["name"] == "twist_short"
-                else f"short +0.5 pp, long -2 pp"
+                "short -1 pp, long +1 pp" if tw["name"] == "steepener"
+                else "short +1 pp, long -1 pp" if tw["name"] == "flattener"
+                else "short -2 pp, long +1 pp" if tw["name"] == "twist_short"
+                else "short +0.5 pp, long -2 pp"
             ),
         })
     return out
@@ -368,7 +368,7 @@ def synthetic_yield(valdate, maturity, coupon_rate: float, ytm: float,
 
     # Собираем купоны в период горизонта
     coupon_dates_all = _coupon_dates(valdate, maturity, freq)
-    coupons_in_horizon = []
+    coupons_in_horizon: list[dict[str, object]] = []
     for d in coupon_dates_all:
         if valdate < d <= horizon_date:
             if sched and d in sched:
@@ -377,7 +377,7 @@ def synthetic_yield(valdate, maturity, coupon_rate: float, ytm: float,
                 c_amount = coupon_rate / freq / 100 * face
             coupons_in_horizon.append({"date": d, "amount": c_amount})
 
-    total_coupons = sum(c["amount"] for c in coupons_in_horizon)
+    total_coupons: float = sum(c["amount"] for c in coupons_in_horizon)  # type: ignore[misc]
 
     # Реинвестирование купонов: каждый купон реинвестируется до конца горизонта
     reinvested_value = 0.0

@@ -366,7 +366,7 @@ def _parse_rating_rows(html: str, category_id: str) -> list[dict[str, Any]]:
         # Парсим имя: строки разделены <br> или \n
         raw_text = re.sub(r"<br\s*/?>", "\n", name_html)
         raw_text = re.sub(r"</?\w+[^>]*>", " ", raw_text)
-        lines = [l.strip() for l in raw_text.split("\n") if l.strip()]
+        lines = [lo.strip() for lo in raw_text.split("\n") if lo.strip()]
         if not lines:
             continue
 
@@ -455,7 +455,7 @@ def _fetch_category_ratings(cat_id: str) -> list[dict[str, Any]]:
         for ph in page_hashes:
             try:
                 session.post(
-                    f"https://raexpert.ru/ratings/index/ajax-set-rating-page-hash/",
+                    "https://raexpert.ru/ratings/index/ajax-set-rating-page-hash/",
                     data={"rating_page_hash": ph, "CSRFAjaxToken": csrf_token},
                     timeout=15,
                 )
@@ -557,8 +557,3 @@ def rating_search(query: str) -> list[dict[str, Any]]:
             unique.append(r)
 
     return unique
-
-
-def list_categories() -> dict[str, str]:
-    """Список доступных категорий рейтингов."""
-    return dict(_CATEGORIES)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Any
 
 import requests
@@ -125,7 +125,6 @@ def parse_calendar(html: str, year: int | None = None) -> list[dict[str, Any]]:
     entries = _PAYMENT_PATTERN.findall(html)
 
     # Определить год по заголовкам месяцев (если есть)
-    month_headers = _MONTH_PATTERN.findall(html)
     # TODO: можно уточнить год по заголовкам
 
     results = []

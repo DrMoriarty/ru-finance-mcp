@@ -101,7 +101,6 @@ def _resolve_spot_price(asset_code: str) -> tuple[float | None, str]:
     Для не-FX (акции, индексы, товары) — quote() с MOEX.
     В обоих случаях settle_per_unit = settle / lot_volume (для basis).
     """
-    from datetime import date as _date
 
     ref = _UNDERLYING_MAP.get(asset_code, {})
     cbr_fx = ref.get("cbr_fx")
@@ -622,14 +621,13 @@ def emitent_bonds(
         value_today, vol_today.
         Сортировка по duration_years ↑.
     """
-    from datetime import date as _date
 
     # ── Шаг 1: резолв emitent_id (ISS /securities — единственный источник id) ──
     try:
         search_raw = raw_get("securities", {"q": query, "limit": 200})
         bond_rows = [r for r in records(search_raw, "securities")
                      if r.get("group") == "stock_bonds"]
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
     if not bond_rows:
         return []
@@ -662,7 +660,6 @@ def emitent_bonds(
             board_data.extend(f.result())
 
     # ── Шаг 3: match + нормализация ──
-    today = _date.today()
     matches: list[dict] = []
     for row in board_data:
         sid = row.get("SECID")
@@ -832,9 +829,8 @@ def _parse_board_bond(row: dict, board: str) -> dict | None:
     has_offer = bool(active_offer or active_put or active_call)
     first_offer = None
     for d in (active_offer, active_put, active_call):
-        if d and d != "0000-00-00":
-            if first_offer is None or d < first_offer:
-                first_offer = d
+        if d and d != "0000-00-00" and (first_offer is None or d < first_offer):
+            first_offer = d
 
     # Срок до погашения (years)
     ytm_years = None
@@ -855,7 +851,6 @@ def _parse_board_bond(row: dict, board: str) -> dict | None:
     num_trades = row.get("NUMTRADES")
     bid = row.get("BID")
     offer_px = row.get("OFFER")
-    spread = row.get("SPREAD")
     bid_ask_spread_pct = None
     if bid and offer_px and bid > 0 and offer_px > 0 and offer_px > bid:
         avg_price = (bid + offer_px) / 2
@@ -1077,15 +1072,15 @@ def bond_screener(
     if rating_min is not None:
         # Рейтинги загружаются только при запросе фильтра
         try:
-            from .raexpert import _fetch_all_ratings, _RATING_ORDER as ro
+            from .raexpert import _RATING_ORDER, _fetch_all_ratings
             all_ratings_cache = _fetch_all_ratings()
-            min_score = ro.get(rating_min.strip())
+            min_score = _RATING_ORDER.get(rating_min.strip())
             if min_score is not None:
                 rated_filtered = []
                 for b in filtered:
                     rating = _match_rating(b.get("emitent", ""), all_ratings_cache)
                     b["rating"] = rating
-                    if rating and rating != "отозван" and ro.get(rating, -1) >= min_score:
+                    if rating and rating != "отозван" and _RATING_ORDER.get(rating, -1) >= min_score:
                         rated_filtered.append(b)
                 filtered = rated_filtered
         except Exception:
@@ -1309,15 +1304,15 @@ def bond_prescreener(
     if rating_min is not None:
         # Рейтинги загружаются только при запросе фильтра
         try:
-            from .raexpert import _fetch_all_ratings, _RATING_ORDER as ro
+            from .raexpert import _RATING_ORDER, _fetch_all_ratings
             all_ratings_cache = _fetch_all_ratings()
-            min_score = ro.get(rating_min.strip())
+            min_score = _RATING_ORDER.get(rating_min.strip())
             if min_score is not None:
                 rated_filtered = []
                 for b in filtered:
                     rating = _match_rating(b.get("emitent", ""), all_ratings_cache)
                     b["rating"] = rating
-                    if rating and rating != "отозван" and ro.get(rating, -1) >= min_score:
+                    if rating and rating != "отозван" and _RATING_ORDER.get(rating, -1) >= min_score:
                         rated_filtered.append(b)
                 filtered = rated_filtered
         except Exception:
@@ -1508,8 +1503,8 @@ def _fetch_correlations_page(start: int, retries: int = 4) -> list[dict]:
             r.raise_for_status()
             b = r.json().get("coefficients") or {}
             cols = b.get("columns") or []
-            return [dict(zip(cols, row)) for row in (b.get("data") or [])]
-        except Exception as e:  # noqa: BLE001
+            return [dict(zip(cols, row, strict=False)) for row in (b.get("data") or [])]
+        except Exception as e:
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -1774,7 +1769,7 @@ def liquidity(query: str, days: int = 90) -> dict:
         md = _marketdata_row(r_q["secid"], r_q["engine"], r_q["market"], r_q["board"])
         bid = md.get("BID")
         ask = md.get("OFFER")
-    except Exception:  # noqa: BLE001
+    except Exception:
         bid = ask = None
 
     n_trading = len(rows)
@@ -1791,14 +1786,14 @@ def liquidity(query: str, days: int = 90) -> dict:
         from datetime import datetime as _dt
         span = (_dt.fromisoformat(str(last_date)[:10]) -
                 _dt.fromisoformat(str(first_date)[:10])).days + 1
-    except Exception:  # noqa: BLE001
+    except Exception:
         span = days
     trading_day_ratio = round(n_trading / max(span, 1), 2)
 
     # 3) Amihud illiquidity ratio (bps per 1M ₽ avg daily turnover)
     #    = mean(|r_t|/V_t) × 10^6 × 10^4, V_t в рублях → bps на 1 млн₽
     if rets:
-        pairs = list(zip(rets, ruble_turnover[1:]))
+        pairs = list(zip(rets, ruble_turnover[1:], strict=False))
         n_valid = max(1, len(pairs))
         amihud_ratio = sum(abs(r) / v for r, v in pairs if v > 0) / n_valid
         amihud_bps = round(amihud_ratio * 1e10, 2)
@@ -1946,7 +1941,6 @@ ETF_BENCHMARK_MAP: dict[str, dict] = {
     "FXKZ": {"benchmark": None,     "benchmark_name": "Казахстан",        "category": "equity_foreign"},
     "FXWO": {"benchmark": "MSCI World","benchmark_name": "MSCI World",    "category": "equity_foreign"},
     "FXIM": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
-    "TMOS": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
     "TBRU": {"benchmark": "IMOEX",  "benchmark_name": "Индекс МосБиржи",  "category": "equity_russia"},
     "TECH": {"benchmark": "MOEXT",  "benchmark_name": "MOEX IT",          "category": "equity_sector"},
     "DSPB": {"benchmark": None,     "benchmark_name": "Дивидендный",       "category": "equity_dividend"},
@@ -2069,10 +2063,8 @@ def etf_fund_data(query: str) -> dict:
     """
     r = resolve(query)
     is_fund = (r.get("group") or "").endswith(("_ppif", "_etf"))
-    if not is_fund:
-        # Проверяем, может это всё-таки фонд
-        if r.get("group") not in ("stock_ppif", "stock_etf"):
-            raise ValueError(f"{query!r} не является БПИФ/ETF (group={r.get('group')})")
+    if not is_fund and r.get("group") not in ("stock_ppif", "stock_etf"):
+        raise ValueError(f"{query!r} не является БПИФ/ETF (group={r.get('group')})")
 
     # Спецификация бумаги
     spec_raw = exec_template(T_SPEC, {"security": r["secid"]})
@@ -2206,7 +2198,6 @@ def etf_tracking_error(query: str, days: int = 90) -> dict:
         return {"error": "недостаточно данных по фонду", "secid": r["secid"]}
 
     fund_closes = [row["close"] for row in fund_rows if row.get("close")]
-    fund_dates = [row.get("begin", "") for row in fund_rows]
 
     # 2) Определяем бенчмарк
     bm_info = ETF_BENCHMARK_MAP.get(r["secid"], {})
@@ -2243,7 +2234,6 @@ def etf_tracking_error(query: str, days: int = 90) -> dict:
             "benchmark_rows": len(bm_rows),
         }
 
-    bm_closes = [row["close"] for row in bm_rows if row.get("close")]
 
     # 4) Выравниваем по датам
     fund_by_date: dict[str, float] = {}
@@ -2291,7 +2281,6 @@ def etf_tracking_error(query: str, days: int = 90) -> dict:
         tracking_err = round(var_d ** 0.5 * (252 ** 0.5) * 100, 2)
 
     # 7) Средняя премия/дисконт за период (если есть iNAV)
-    premium_avg = None
     inav = inav_quote(r["secid"])
 
     return {
@@ -2370,7 +2359,8 @@ def technical_indicators(query: str, days: int = 90) -> dict:
          momentum_10, roc_10,
          cmf_20, cmf_signal}
     """
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
 
     r = resolve(query)
     till = _date.today()
@@ -2386,7 +2376,6 @@ def technical_indicators(query: str, days: int = 90) -> dict:
     if len(closes) < 14:
         return {"error": "недостаточно данных", "secid": r["secid"], "trading_days": len(closes)}
 
-    opens = [row["open"] for row in rows if row.get("open")]
     highs = [row["high"] for row in rows if row.get("high")]
     lows = [row["low"] for row in rows if row.get("low")]
     volumes = [row["volume"] for row in rows if row.get("volume")]
@@ -2530,12 +2519,12 @@ def technical_indicators(query: str, days: int = 90) -> dict:
         plus_dm = []
         minus_dm = []
         for i in range(1, len(highs)):
-            h, l, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
-            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+            h, lo, prev_h, prev_l, prev_c = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
+            tr = max(h - lo, abs(h - prev_c), abs(lo - prev_c))
             tr_list.append(tr)
 
             up_move = h - prev_h
-            down_move = prev_l - l
+            down_move = prev_l - lo
             plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
             minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
 
@@ -2581,8 +2570,8 @@ def technical_indicators(query: str, days: int = 90) -> dict:
     if len(highs) >= atr_period + 1:
         tr_list_atr = []
         for i in range(1, len(highs)):
-            h, l, prev_c = highs[i], lows[i], closes[i-1]
-            tr_list_atr.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+            h, lo, prev_c = highs[i], lows[i], closes[i-1]
+            tr_list_atr.append(max(h - lo, abs(h - prev_c), abs(lo - prev_c)))
 
         atr_smoothed = _wilder_smooth(tr_list_atr, atr_period)
         if atr_smoothed:
@@ -2647,9 +2636,6 @@ def technical_indicators(query: str, days: int = 90) -> dict:
                 return None
             window = data[-period:]
             return (max(window) + min(window)) / 2
-
-        tenkan = _mid_point(highs, tenkan_p) and _mid_point(lows, tenkan_p)
-        kijun = _mid_point(highs, kijun_p) and _mid_point(lows, kijun_p)
 
         if len(highs) >= tenkan_p and len(lows) >= tenkan_p:
             h_t = max(highs[-tenkan_p:])
@@ -2820,7 +2806,8 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
          patterns: [{pattern, bar_type, signal, strength, bars_back,
                      date, signal_detail, pattern_details}]}.
     """
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
 
     r = resolve(query)
     till = _date.today()
@@ -2853,17 +2840,17 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
     # Нормализация свечей
     candles_all: list[dict] = []
     for i in range(n):
-        o, h, l, c = opens_raw[i], highs_raw[i], lows_raw[i], closes_raw[i]
-        rng = h - l
+        o, h, lo, c = opens_raw[i], highs_raw[i], lows_raw[i], closes_raw[i]
+        rng = h - lo
         body = abs(c - o)
         hi_val = max(o, c)
         lo_val = min(o, c)
         candles_all.append({
             "idx": i, "date": dates_raw[i] if i < len(dates_raw) else "",
-            "open": o, "high": h, "low": l, "close": c,
+            "open": o, "high": h, "low": lo, "close": c,
             "volume": volumes_raw[i] if i < len(volumes_raw) else None,
             "body": body, "range": rng,
-            "lower_shadow": lo_val - l, "upper_shadow": h - hi_val,
+            "lower_shadow": lo_val - lo, "upper_shadow": h - hi_val,
             "body_pct": body / rng if rng > 0 else 0.0,
             "direction": 1 if c > o else -1 if c < o else 0,
             "midpoint": (o + c) / 2,
@@ -2990,7 +2977,6 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
         for k in range(n_bars - 2):
             idx = n_bars - 1 - k
             a, b, cc = c[idx - 2], c[idx - 1], c[idx]
-            ab_range = a["high"] - a["low"] or 1e-12
 
             # Morning Star
             if (a["direction"] == -1 and b["body_pct"] <= 0.30 and cc["direction"] == 1 and b["close"] < a["close"]):
@@ -3383,7 +3369,8 @@ def etf_screener(
     perf_field = f"performance_{performance_period}"
 
     if include_indicators or performance_min is not None or performance_max is not None:
-        from datetime import date as _date, timedelta
+        from datetime import date as _date
+        from datetime import timedelta
         today = _date.today()
 
         # Для YTD считаем с начала года
@@ -3485,7 +3472,8 @@ def etf_screener(
     # ── Шаг 7: расчёт Beta через IMOEX ──
     if include_indicators or beta_min is not None or beta_max is not None:
         # Загружаем свечи IMOEX за тот же период
-        from datetime import date as _date, timedelta
+        from datetime import date as _date
+        from datetime import timedelta
         today = _date.today()
         frm_date = today - timedelta(days=400)
         try:
@@ -3666,11 +3654,11 @@ def etf_screener(
                     plus_dm = []
                     minus_dm = []
                     for i in range(1, len(highs_ta)):
-                        h, l, prev_h, prev_l, prev_c = highs_ta[i], lows_ta[i], highs_ta[i-1], lows_ta[i-1], adx_closes[i-1]
-                        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+                        h, lo, prev_h, prev_l, prev_c = highs_ta[i], lows_ta[i], highs_ta[i-1], lows_ta[i-1], adx_closes[i-1]
+                        tr = max(h - lo, abs(h - prev_c), abs(lo - prev_c))
                         tr_list.append(tr)
                         up_move = h - prev_h
-                        down_move = prev_l - l
+                        down_move = prev_l - lo
                         plus_dm.append(up_move if up_move > down_move and up_move > 0 else 0)
                         minus_dm.append(down_move if down_move > up_move and down_move > 0 else 0)
 
@@ -3708,8 +3696,8 @@ def etf_screener(
             if len(highs_ta) >= 2 and len(lows_ta) >= 2:
                 tr_list_atr = []
                 for i in range(1, len(highs_ta)):
-                    h, l, prev_c = highs_ta[i], lows_ta[i], closes[i-1]
-                    tr_list_atr.append(max(h - l, abs(h - prev_c), abs(l - prev_c)))
+                    h, lo, prev_c = highs_ta[i], lows_ta[i], closes[i-1]
+                    tr_list_atr.append(max(h - lo, abs(h - prev_c), abs(lo - prev_c)))
                 ws_period = 14
                 if len(tr_list_atr) >= ws_period:
                     atr_s = sum(tr_list_atr[:ws_period]) / ws_period
@@ -4124,7 +4112,8 @@ def futures_basis(asset_code: str) -> dict:
     Вход: asset_code — код базисного актива ('Si', 'RTS', 'BR', 'GAZR', ...).
     Возвращает: {asset_code, underlying: {price, source}, regime, contracts: [...]}.
     """
-    from datetime import date as _date, datetime as _dt
+    from datetime import date as _date
+    from datetime import datetime as _dt
 
     asset_code = _canonical_asset(asset_code)
     contracts = futures_list(asset_code)
@@ -4310,8 +4299,8 @@ def _fetch_all_candles(tickers: list[str], days: int):
 
     Возвращает: (candles: {secid: {date: price}}, resolved: {query: resolve_dict}).
     """
-    from datetime import date, timedelta
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import date, timedelta
 
     till = date.today()
     frm = till - timedelta(days=days + 10)
@@ -4344,7 +4333,6 @@ def _fetch_all_candles(tickers: list[str], days: int):
 
 def _pair_compact(y, x, method: str) -> dict:
     """Компактный результат коинтеграции для одной пары."""
-    import numpy as np
     entry: dict = {}
     sort_key = 0.0
 
@@ -4395,7 +4383,7 @@ def cointegration_scan(ticker: str, candidates: str | list[str],
     if not candidates:
         return {"error": "список кандидатов пуст"}
 
-    all_tickers = [ticker] + candidates
+    all_tickers = [ticker, *candidates]
     candles, resolved = _fetch_all_candles(all_tickers, days)
 
     r_ref = resolved.get(ticker)
@@ -4447,8 +4435,9 @@ def cointegration_matrix(tickers: str | list[str], days: int = 252,
     Возвращает: {n_tickers, pairs_tested, results: [{ticker1, ticker2, n_obs, engle_granger?, johansen?}]}
     — отсортировано по убыванию значимости.
     """
-    import numpy as np
     from itertools import combinations
+
+    import numpy as np
 
     if isinstance(tickers, str):
         tickers = [t.strip() for t in tickers.split(",") if t.strip()]
@@ -4758,8 +4747,9 @@ def cointegration(ticker1: str, ticker2: str, days: int = 252,
                  engle_granger: {t_stat, critical_values, hedge_ratio, half_life_days, ...},
                  johansen: {trace_stat, max_eigenvalue_stat, cointegrating_vector, ...}}.
     """
-    import numpy as np
     from datetime import date, timedelta
+
+    import numpy as np
 
     till = date.today()
     frm = till - timedelta(days=days + 10)

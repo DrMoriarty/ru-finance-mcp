@@ -15,6 +15,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7"]
+dev = ["ruff>=0.8", "mypy>=1.13"]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -25,3 +26,55 @@ packages = ["ru_finance"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "SIM108", # ternary operator — readability субъективна
+    "RUF001", # ambiguous unicode in strings (кириллица — норма для проекта)
+    "RUF002", # ambiguous unicode in docstrings
+    "RUF003", # ambiguous unicode in comments
+    "N806",   # variable in function should be lowercase (константы внутри функций OK)
+    "SIM105", # contextlib.suppress — matter of taste
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ru_finance"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+warn_return_any = false
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+check_untyped_defs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+disable_error_code = ["import-untyped", "import-not-found"]
+
+[[tool.mypy.overrides]]
+module = [
+    "ru_finance.moex",
+    "ru_finance.session",
+    "ru_finance.mcp_server",
+    "ru_finance.option_calc",
+    "ru_finance.raexpert",
+    "ru_finance.portfolio",
+]
+ignore_errors = true

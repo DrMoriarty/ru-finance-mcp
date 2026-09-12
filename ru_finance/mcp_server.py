@@ -250,7 +250,7 @@ class InMemoryEventStore(EventStore):
         send_callback: EventCallback,
     ) -> StreamId | None:
         for stream_id, events in self._events.items():
-            for idx, (eid, msg) in enumerate(events):
+            for idx, (eid, _msg) in enumerate(events):
                 if eid == last_event_id:
                     for _, m in events[idx + 1 :]:
                         if m is not None:
@@ -1197,7 +1197,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
     await ctx.report_progress(1, 5, "Fetching coupon schedule")
     try:
         coupon_schedule = moex.future_bond_coupons(query)
-    except Exception:  # noqa: BLE001
+    except Exception:
         coupon_schedule = []
     if coupon_schedule:
         rep["coupon_schedule"] = coupon_schedule
@@ -1206,7 +1206,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
     try:
         infl_data = cbr.inflation(tail=1)
         actual_inflation = infl_data.get("latest_inflation")
-    except Exception:  # noqa: BLE001
+    except Exception:
         actual_inflation = None
 
     if b.get("maturity"):
@@ -1259,7 +1259,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
             cy = rate.curve_yield(dur)
             rep["spread_to_curve"] = bonds.spread_to_curve(
                 ytm, dur, cy.get("yield", 0))
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     return rep
@@ -1298,7 +1298,7 @@ async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
     await ctx.report_progress(1, 3, "Fetching coupon schedule")
     try:
         cs = moex.future_bond_coupons(query)
-    except Exception:  # noqa: BLE001
+    except Exception:
         cs = []
     result = bonds.synthetic_yield(
         date.today(), b["maturity"], b["coupon_pct"], b["ytm"],
@@ -1703,7 +1703,7 @@ async def portfolio_snapshot(assets: str, ctx: Context) -> dict:
     try:
         infl_data = await asyncio.to_thread(cbr.inflation, tail=1)
         inflation_pct = infl_data.get("latest_inflation")
-    except Exception:  # noqa: BLE001
+    except Exception:
         inflation_pct = None
     await ctx.report_progress(1, 3, "Building portfolio snapshot")
     return await asyncio.to_thread(portfolio.snapshot, assets, inflation_pct=inflation_pct)
