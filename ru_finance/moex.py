@@ -2526,15 +2526,15 @@ def _compute_technical_indicators(closes, highs, lows, volumes, secid, period_da
     tp_, kp_, sbp_ = 9, 26, 52
     if len(highs) >= sbp_:
         if len(highs) >= tp_:
-            result["ichimoku_tenkan"] = round((max(highs[-tp_]) + min(lows[-tp_])) / 2, 4)
+            result["ichimoku_tenkan"] = round((max(highs[-tp_:]) + min(lows[-tp_:])) / 2, 4)
         if len(highs) >= kp_:
-            result["ichimoku_kijun"] = round((max(highs[-kp_]) + min(lows[-kp_])) / 2, 4)
+            result["ichimoku_kijun"] = round((max(highs[-kp_:]) + min(lows[-kp_:])) / 2, 4)
         tk = result.get("ichimoku_tenkan")
         kj = result.get("ichimoku_kijun")
         if tk is not None and kj is not None:
             result["ichimoku_senkou_a"] = round((tk + kj) / 2, 4)
         if len(highs) >= sbp_:
-            result["ichimoku_senkou_b"] = round((max(highs[-sbp_]) + min(lows[-sbp_])) / 2, 4)
+            result["ichimoku_senkou_b"] = round((max(highs[-sbp_:]) + min(lows[-sbp_:])) / 2, 4)
         if len(closes) >= kp_:
             result["ichimoku_chikou"] = round(closes[-1], 4)
         sa, sb_ = result.get("ichimoku_senkou_a"), result.get("ichimoku_senkou_b")
