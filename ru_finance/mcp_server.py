@@ -1490,19 +1490,20 @@ async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict
 
 @_tool()
 async def technical_indicators(query: str, ctx: Context, days: int = 90) -> dict:
-    """Full technical analysis suite for any MOEX instrument (stocks, ETF, bonds).
+    """Full technical analysis suite on 3 timeframes: hourly, daily, weekly.
 
-    Indicators — see ref://technical-indicators. Computes from daily OHLCV candles.
-    Args: query — ticker or ISIN; days — lookback (default 90, 200+ for Ichimoku/SMA200).
-    Returns: all indicators as a flat dict; keys present only when enough data.
+    Indicators — see ref://technical-indicators. For period=90: hourly — 90 hourly
+    candles (90 trading hours), daily — 90 daily candles, weekly — 90 weekly candles.
+    Args: query — ticker or ISIN; days — period (default 90).
+    Returns: {secid, period, timeframes: {hourly: {...}, daily: {...}, weekly: {...}}}.
     """
-    await ctx.report_progress(0, 2, "Fetching candle data + computing indicators")
-    return moex.technical_indicators(query, days)
+    await ctx.report_progress(0, 2, "Fetching candle data + computing indicators on 3 timeframes")
+    return moex.technical_indicators_multi_tf(query, days)
 
 
 @_tool()
 async def candlestick_patterns(query: str, ctx: Context, days: int = 90) -> dict:
-    """Candlestick pattern recognition from daily OHLCV candles.
+    """Candlestick pattern recognition on 3 timeframes: hourly, daily, weekly.
 
     Detects 14 classic patterns: doji (4 variants), hammer, hanging man,
     shooting star, bullish/bearish marubozu, engulfing (bullish/bearish),
@@ -1511,11 +1512,12 @@ async def candlestick_patterns(query: str, ctx: Context, days: int = 90) -> dict
     Each pattern carries signal (bullish/bearish/neutral), strength (1-3),
     and positional context (period high/low percentile).
     Aggregate signal = weighted sum of all detected patterns.
-    Args: query — ticker or ISIN; days — lookback (default 90).
-    Returns: {secid, trading_days, signal, total_bullish, total_bearish, patterns: [...]}}.
+    For period=90: hourly — 90 candles (90 h), daily — 90 candles, weekly — 90 candles.
+    Args: query — ticker or ISIN; days — period (default 90).
+    Returns: {secid, period, timeframes: {hourly: {...}, daily: {...}, weekly: {...}}}.
     """
-    await ctx.report_progress(0, 2, "Fetching candle data + scanning patterns")
-    return moex.candlestick_analysis(query, days)
+    await ctx.report_progress(0, 2, "Fetching candle data + scanning patterns on 3 timeframes")
+    return moex.candlestick_analysis_multi_tf(query, days)
 
 
 # ─────────────────────────── ETF / БПИФ ───────────────────────────

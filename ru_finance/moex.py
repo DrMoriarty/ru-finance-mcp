@@ -2333,6 +2333,466 @@ def _fetch_board_etf(board: str, retries: int = 4) -> list[dict]:
     return out
 
 
+def _fetch_query_candles(query: str, days: int, interval: str) -> dict:
+    from datetime import date as _date
+    from datetime import timedelta
+    r = resolve(query)
+    till = _date.today()
+    if interval == "60":
+        frm = till - timedelta(days=max(days * 2, 15))
+    elif interval == "7":
+        frm = till - timedelta(days=days * 7 + 30)
+    else:
+        frm = till - timedelta(days=days + 30)
+    raw = exec_template(T_CANDLES, {
+        "engine": r["engine"], "market": r["market"],
+        "board": r["board"], "security": r["secid"]},
+        {"from": str(frm), "till": str(till), "interval": interval})
+    rows = records(raw, "candles")
+    return {"rows": rows, "secid": r["secid"]}
+
+
+_TF_CONFIG = [
+    ("hourly", "60"),
+    ("daily", "24"),
+    ("weekly", "7"),
+]
+
+
+def _compute_technical_indicators(closes, highs, lows, volumes, secid, period_days, interval) -> dict:
+    result = {"secid": secid, "interval": interval, "period": period_days, "trading_days": len(closes)}
+
+    def _sma(data, period):
+        if len(data) < period:
+            return None
+        return round(sum(data[-period:]) / period, 6)
+
+    def _ema_series(data, period):
+        if len(data) < period:
+            return []
+        mult = 2 / (period + 1)
+        e = [sum(data[:period]) / period]
+        for i in range(period, len(data)):
+            e.append(data[i] * mult + e[-1] * (1 - mult))
+        return e
+
+    def _wilder(data, period):
+        if len(data) < period:
+            return []
+        w = [sum(data[:period]) / period]
+        for i in range(period, len(data)):
+            w.append((w[-1] * (period - 1) + data[i]) / period)
+        return w
+
+    rsi_p = 14
+    if len(closes) >= rsi_p + 1:
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            d = closes[i] - closes[i - 1]
+            gains.append(max(0, d))
+            losses.append(max(0, -d))
+        ag = sum(gains[:rsi_p]) / rsi_p
+        al = sum(losses[:rsi_p]) / rsi_p
+        for i in range(rsi_p, len(gains)):
+            ag = (ag * (rsi_p - 1) + gains[i]) / rsi_p
+            al = (al * (rsi_p - 1) + losses[i]) / rsi_p
+        result["rsi_14"] = 100.0 if al == 0 else round(100 - 100 / (1 + ag / al), 2)
+
+    sp = 14
+    if len(closes) >= sp and len(highs) >= sp and len(lows) >= sp:
+        skv = []
+        for i in range(sp - 1, len(closes)):
+            hh = max(highs[i - sp + 1:i + 1])
+            ll = min(lows[i - sp + 1:i + 1])
+            skv.append(50.0 if hh == ll else (closes[i] - ll) / (hh - ll) * 100)
+        if len(skv) >= 3:
+            result["stochastic_k"] = round(sum(skv[-3:]) / 3, 2)
+            if len(skv) >= 5:
+                dv = [sum(skv[j - 2:j + 1]) / 3 for j in range(2, len(skv))]
+                result["stochastic_d"] = round(dv[-1], 2)
+
+    result["ma_50"] = _sma(closes, 50)
+    result["ma_200"] = _sma(closes, 200)
+    e12 = _ema_series(closes, 12)
+    e26 = _ema_series(closes, 26)
+    if e12:
+        result["ema_12"] = round(e12[-1], 4)
+    if e26:
+        result["ema_26"] = round(e26[-1], 4)
+    m50, m200 = result["ma_50"], result["ma_200"]
+    result["ma_signal"] = "golden_cross" if m50 is not None and m200 is not None and m50 > m200 else "death_cross" if m50 is not None and m200 is not None else "insufficient_data"
+
+    if len(e12) >= 26 and len(e26) >= 9:
+        off = len(e12) - len(e26)
+        ml = [e12[off + i] - e26[i] for i in range(len(e26))]
+        if len(ml) >= 9:
+            sl = _ema_series(ml, 9)
+            hist = ml[-1] - sl[-1]
+            result["macd"] = round(ml[-1], 4)
+            result["macd_signal_line"] = round(sl[-1], 4)
+            result["macd_histogram"] = round(hist, 4)
+            result["macd_signal"] = "bullish" if hist > 0 else "bearish" if hist < 0 else "neutral"
+
+    bbp = 20
+    if len(closes) >= bbp:
+        bs = sum(closes[-bbp:]) / bbp
+        v = sum((c - bs) ** 2 for c in closes[-bbp:]) / bbp
+        sd = v ** 0.5
+        result["bollinger_upper"] = round(bs + 2 * sd, 4)
+        result["bollinger_middle"] = round(bs, 4)
+        result["bollinger_lower"] = round(bs - 2 * sd, 4)
+        result["bollinger_width"] = round(4 * sd / bs * 100, 2) if bs else None
+        rng = 4 * sd
+        if rng > 0:
+            result["bollinger_pct"] = round((closes[-1] - (bs - 2 * sd)) / rng, 4)
+
+    ap = 14
+    if len(highs) >= ap + 1 and len(lows) >= ap + 1:
+        trl, pdm, mdm = [], [], []
+        for i in range(1, len(highs)):
+            h, lo, ph, pl_, pc = highs[i], lows[i], highs[i - 1], lows[i - 1], closes[i - 1]
+            trl.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+            um, dm_ = h - ph, pl_ - lo
+            pdm.append(um if um > dm_ and um > 0 else 0)
+            mdm.append(dm_ if dm_ > um and dm_ > 0 else 0)
+        if len(trl) >= ap:
+            atr_s = sum(trl[:ap])
+            apdm = sum(pdm[:ap])
+            amdm = sum(mdm[:ap])
+            dxl = []
+            for i in range(ap, len(trl)):
+                atr_s = atr_s - atr_s / ap + trl[i]
+                apdm = apdm - apdm / ap + pdm[i]
+                amdm = amdm - amdm / ap + mdm[i]
+                if atr_s > 0:
+                    pdi = 100 * apdm / atr_s
+                    mdi = 100 * amdm / atr_s
+                    ds = pdi + mdi
+                    if ds > 0:
+                        dxl.append(abs(pdi - mdi) / ds * 100)
+            if len(dxl) >= ap:
+                adx_v = sum(dxl[:ap]) / ap
+                for i in range(ap, len(dxl)):
+                    adx_v = (adx_v * (ap - 1) + dxl[i]) / ap
+                result["adx"] = round(adx_v, 2)
+                if atr_s > 0:
+                    result["plus_di"] = round(100 * apdm / atr_s, 2)
+                    result["minus_di"] = round(100 * amdm / atr_s, 2)
+                result["trend_strength"] = "very_strong" if adx_v >= 40 else "strong" if adx_v >= 25 else "moderate" if adx_v >= 20 else "weak"
+
+    atr_p = 14
+    if len(highs) >= atr_p + 1:
+        tr_a = [max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1])) for i in range(1, len(highs))]
+        ws = _wilder(tr_a, atr_p)
+        if ws:
+            result["atr_14"] = round(ws[-1], 4)
+            result["atr_14_pct"] = round(ws[-1] / closes[-1] * 100, 2) if closes[-1] else None
+
+    if len(closes) >= 2 and len(volumes) >= len(closes):
+        vv = volumes[:len(closes)]
+        obv, os_ = 0, [0]
+        for i in range(1, len(closes)):
+            obv += vv[i] if closes[i] > closes[i - 1] else -vv[i] if closes[i] < closes[i - 1] else 0
+            os_.append(obv)
+        result["obv"] = obv
+        if len(os_) >= 20:
+            result["obv_trend"] = "rising" if sum(os_[-10:]) / 10 > sum(os_[-20:-10]) / 10 else "falling"
+
+    if len(closes) >= 1 and len(highs) >= 1 and len(lows) >= 1 and len(volumes) >= len(closes):
+        ctv, cv = 0.0, 0.0
+        for i in range(min(len(closes), len(highs), len(lows))):
+            tp = (highs[i] + lows[i] + closes[i]) / 3
+            v_ = volumes[i]
+            ctv += tp * v_
+            cv += v_
+        if cv > 0:
+            result["vwap"] = round(ctv / cv, 4)
+
+    cp = 20
+    if len(closes) >= cp and len(highs) >= cp and len(lows) >= cp:
+        tps = [(highs[i] + lows[i] + closes[i]) / 3 for i in range(len(closes))]
+        ts = sum(tps[-cp:]) / cp
+        md = sum(abs(t - ts) for t in tps[-cp:]) / cp
+        if md > 0:
+            result["cci_20"] = round((tps[-1] - ts) / (0.015 * md), 2)
+
+    wp = 14
+    if len(closes) >= wp and len(highs) >= wp and len(lows) >= wp:
+        hh = max(highs[-wp:])
+        ll = min(lows[-wp:])
+        if hh != ll:
+            result["williams_r"] = round((hh - closes[-1]) / (hh - ll) * -100, 2)
+
+    tp_, kp_, sbp_ = 9, 26, 52
+    if len(highs) >= sbp_:
+        if len(highs) >= tp_:
+            result["ichimoku_tenkan"] = round((max(highs[-tp_]) + min(lows[-tp_])) / 2, 4)
+        if len(highs) >= kp_:
+            result["ichimoku_kijun"] = round((max(highs[-kp_]) + min(lows[-kp_])) / 2, 4)
+        tk = result.get("ichimoku_tenkan")
+        kj = result.get("ichimoku_kijun")
+        if tk is not None and kj is not None:
+            result["ichimoku_senkou_a"] = round((tk + kj) / 2, 4)
+        if len(highs) >= sbp_:
+            result["ichimoku_senkou_b"] = round((max(highs[-sbp_]) + min(lows[-sbp_])) / 2, 4)
+        if len(closes) >= kp_:
+            result["ichimoku_chikou"] = round(closes[-1], 4)
+        sa, sb_ = result.get("ichimoku_senkou_a"), result.get("ichimoku_senkou_b")
+        if sa is not None and sb_ is not None:
+            lc = closes[-1]
+            result["ichimoku_signal"] = "bullish" if lc > max(sa, sb_) else "bearish" if lc < min(sa, sb_) else "in_cloud"
+
+    if len(highs) >= 2 and len(lows) >= 2:
+        af, afm, afs = 0.02, 0.20, 0.02
+        il = closes[1] >= closes[0]
+        ep = highs[0] if il else lows[0]
+        sv = lows[0] if il else highs[0]
+        for i in range(1, len(highs)):
+            sv = sv + af * (ep - sv)
+            if il:
+                sv = min(sv, lows[i - 1])
+                if i >= 2:
+                    sv = min(sv, lows[i - 2])
+                if lows[i] < sv:
+                    il, sv, ep, af = False, ep, lows[i], afs
+                elif highs[i] > ep:
+                    ep = highs[i]
+                    af = min(af + afs, afm)
+            else:
+                sv = max(sv, highs[i - 1])
+                if i >= 2:
+                    sv = max(sv, highs[i - 2])
+                if highs[i] > sv:
+                    il, sv, ep, af = True, ep, highs[i], afs
+                elif lows[i] < ep:
+                    ep = lows[i]
+                    af = min(af + afs, afm)
+        result["psar"] = round(sv, 4)
+        result["psar_direction"] = "long" if il else "short"
+
+    if len(highs) >= 1 and len(lows) >= 1 and len(closes) >= 1:
+        h, l, c = highs[-1], lows[-1], closes[-1]
+        pv = (h + l + c) / 3
+        result["pivot"] = round(pv, 4)
+        result["pivot_r1"] = round(2 * pv - l, 4)
+        result["pivot_s1"] = round(2 * pv - h, 4)
+        result["pivot_r2"] = round(pv + (h - l), 4)
+        result["pivot_s2"] = round(pv - (h - l), 4)
+        result["pivot_r3"] = round(pv + 2 * (h - l), 4)
+        result["pivot_s3"] = round(pv - 2 * (h - l), 4)
+
+    if len(highs) >= 2 and len(lows) >= 2:
+        fh, fl = max(highs), min(lows)
+        diff = fh - fl
+        result["fib_high"] = round(fh, 4)
+        result["fib_low"] = round(fl, 4)
+        result["fib_236"] = round(fh - diff * 0.236, 4)
+        result["fib_382"] = round(fh - diff * 0.382, 4)
+        result["fib_500"] = round(fh - diff * 0.500, 4)
+        result["fib_618"] = round(fh - diff * 0.618, 4)
+        result["fib_786"] = round(fh - diff * 0.786, 4)
+
+    rp = 10
+    if len(closes) > rp:
+        result["momentum_10"] = round(closes[-1] - closes[-1 - rp], 4)
+        if closes[-1 - rp] != 0:
+            result["roc_10"] = round((closes[-1] / closes[-1 - rp] - 1) * 100, 2)
+
+    cmfp = 20
+    if len(closes) >= cmfp and len(highs) >= cmfp and len(lows) >= cmfp and len(volumes) >= cmfp:
+        mfv, vs = 0.0, 0.0
+        for i in range(len(closes) - cmfp, len(closes)):
+            hl = highs[i] - lows[i]
+            if hl > 0:
+                mfm = ((closes[i] - lows[i]) - (highs[i] - closes[i])) / hl
+                mfv += mfm * volumes[i]
+                vs += volumes[i]
+        if vs > 0:
+            cmf = mfv / vs
+            result["cmf_20"] = round(cmf, 4)
+            result["cmf_signal"] = "buying_pressure" if cmf > 0.05 else "selling_pressure" if cmf < -0.05 else "neutral"
+
+    return result
+
+
+def _compute_candlestick_analysis(candles_rows, secid, period_days, interval) -> dict:
+    opens_raw = [r["open"] for r in candles_rows if r.get("open")]
+    highs_raw = [r["high"] for r in candles_rows if r.get("high")]
+    lows_raw = [r["low"] for r in candles_rows if r.get("low")]
+    closes_raw = [r["close"] for r in candles_rows if r.get("close")]
+    volumes_raw = [r["volume"] for r in candles_rows if r.get("volume")]
+    dates_raw = [r.get("begin", "") for r in candles_rows]
+    n = len(closes_raw)
+    if n < 3:
+        return {"error": "недостаточно данных", "secid": secid, "interval": interval, "trading_days": n}
+    result = {"secid": secid, "interval": interval, "period": period_days, "trading_days": n, "candles_analyzed": n}
+
+    ca = []
+    for i in range(n):
+        o, h, lo, c = opens_raw[i], highs_raw[i], lows_raw[i], closes_raw[i]
+        rng = h - lo
+        body = abs(c - o)
+        hv, lv = max(o, c), min(o, c)
+        ca.append({
+            "idx": i, "date": dates_raw[i] if i < len(dates_raw) else "",
+            "open": o, "high": h, "low": lo, "close": c,
+            "volume": volumes_raw[i] if i < len(volumes_raw) else None,
+            "body": body, "range": rng,
+            "lower_shadow": lv - lo, "upper_shadow": h - hv,
+            "body_pct": body / rng if rng > 0 else 0.0,
+            "direction": 1 if c > o else -1 if c < o else 0,
+            "midpoint": (o + c) / 2,
+        })
+    mr = max((c["range"] for c in ca), default=1)
+    ph = max(c["high"] for c in ca)
+    pl = min(c["low"] for c in ca)
+    pr = ph - pl or 1.0
+    for c in ca:
+        c["normalized_range"] = c["range"] / mr if mr else 0.0
+        c["period_pct_high"] = (c["high"] - pl) / pr
+        c["period_pct_low"] = (c["low"] - pl) / pr
+
+    ds = n - 1
+
+    def _single(ci, ctx=0.0):
+        rng, bp, d = ci["range"], ci["body_pct"], ci["direction"]
+        ls, us = ci["lower_shadow"], ci["upper_shadow"]
+        if rng == 0:
+            return None
+        sr = 2 if ci["normalized_range"] >= 0.3 else 1
+        if bp <= 0.1:
+            if ls / rng >= 0.3 and us / rng >= 0.3:
+                sub = "long_legged"
+            elif ls / rng >= 0.6 and us / rng <= 0.15:
+                sub = "dragonfly"
+            elif us / rng >= 0.6 and ls / rng <= 0.15:
+                sub = "gravestone"
+            else:
+                sub = "standard"
+            st = min(sr + 1, 3) if sub in ("dragonfly", "gravestone") else sr
+            return {"pattern": "doji", "sub": sub, "signal": 0, "strength": st}
+        if ls / max(bp * rng, 1e-12) >= 2.0 and ls / rng >= 0.4 and us / rng <= 0.10 and bp <= 0.35:
+            st = min(sr + 1, 3)
+            return {"pattern": "hanging_man", "signal": -1, "strength": st} if ctx > 0.5 else {"pattern": "hammer", "signal": 1, "strength": st}
+        if us / max(bp * rng, 1e-12) >= 2.0 and us / rng >= 0.4 and ls / rng <= 0.10 and bp <= 0.35:
+            return {"pattern": "shooting_star", "signal": -1, "strength": min(sr + 1, 3)}
+        if bp >= 0.90:
+            st = min(sr + 1, 3)
+            if d == 1:
+                return {"pattern": "bullish_marubozu", "signal": 1, "strength": st}
+            if d == -1:
+                return {"pattern": "bearish_marubozu", "signal": -1, "strength": st}
+        return None
+
+    def _multi(c, nb):
+        res = []
+        for k in range(nb - 1):
+            idx = nb - 1 - k
+            p, q = c[idx - 1], c[idx]
+            cap = abs(q["body"]) / max(p["body"], 1e-12)
+            if p["direction"] == -1 and q["direction"] == 1 and p["close"] >= q["close"] and p["open"] <= q["open"] and cap >= 1.1:
+                st = 2 if cap >= 1.5 else 1
+                if q["period_pct_low"] <= 0.3:
+                    st = min(st + 1, 3)
+                res.append({"pattern": "bullish_engulfing", "bar_type": "double", "signal": "bullish", "strength": st, "bars_back": k})
+            if p["direction"] == 1 and q["direction"] == -1 and p["close"] <= q["close"] and p["open"] >= q["open"] and cap >= 1.1:
+                st = 2 if cap >= 1.5 else 1
+                if q["period_pct_high"] >= 0.7:
+                    st = min(st + 1, 3)
+                res.append({"pattern": "bearish_engulfing", "bar_type": "double", "signal": "bearish", "strength": st, "bars_back": k})
+            if p["direction"] == -1 and q["direction"] == 1 and q["close"] <= p["open"] and q["open"] >= p["close"] and cap <= 0.6:
+                res.append({"pattern": "bullish_harami", "bar_type": "double", "signal": "bullish", "strength": 1, "bars_back": k})
+            if p["direction"] == 1 and q["direction"] == -1 and q["close"] >= p["open"] and q["open"] <= p["close"] and cap <= 0.6:
+                res.append({"pattern": "bearish_harami", "bar_type": "double", "signal": "bearish", "strength": 1, "bars_back": k})
+            if p["direction"] <= 0 and q["direction"] == 1 and abs(p["low"] - q["low"]) / p["low"] < 0.002:
+                st = 2 if q["period_pct_low"] <= 0.3 else 1
+                res.append({"pattern": "tweezer_bottom", "bar_type": "double", "signal": "bullish", "strength": st, "bars_back": k})
+            if p["direction"] >= 0 and q["direction"] == -1 and abs(p["high"] - q["high"]) / p["high"] < 0.002:
+                st = 2 if q["period_pct_high"] >= 0.7 else 1
+                res.append({"pattern": "tweezer_top", "bar_type": "double", "signal": "bearish", "strength": st, "bars_back": k})
+        for k in range(nb - 2):
+            idx = nb - 1 - k
+            a, b, cc_ = c[idx - 2], c[idx - 1], c[idx]
+            if a["direction"] == -1 and b["body_pct"] <= 0.30 and cc_["direction"] == 1 and b["close"] < a["close"]:
+                gb = b["high"] < a["low"]
+                p5 = cc_["close"] > (a["open"] + a["close"]) / 2
+                ar = abs(cc_["body"]) / max(abs(a["body"]), 1e-12)
+                st = min(1 + (1 if gb else 0) + (1 if p5 and ar >= 0.5 else 0), 3)
+                res.append({"pattern": "morning_star", "bar_type": "triple", "signal": "bullish", "strength": st, "bars_back": k,
+                            "pattern_details": {"gap_below_mid": gb, "pierce_50pct": p5, "body_ratio": round(ar, 2)}})
+            if a["direction"] == 1 and b["body_pct"] <= 0.30 and cc_["direction"] == -1 and b["close"] > a["close"]:
+                ga = b["low"] > a["high"]
+                p5 = cc_["close"] < (a["open"] + a["close"]) / 2
+                ar = abs(cc_["body"]) / max(abs(a["body"]), 1e-12)
+                st = min(1 + (1 if ga else 0) + (1 if p5 and ar >= 0.5 else 0), 3)
+                res.append({"pattern": "evening_star", "bar_type": "triple", "signal": "bearish", "strength": st, "bars_back": k,
+                            "pattern_details": {"gap_above_mid": ga, "pierce_50pct": p5, "body_ratio": round(ar, 2)}})
+            if a["direction"] == -1 and cc_["direction"] == 1 and a["close"] < cc_["open"] and cc_["close"] > (a["open"] + a["close"]) / 2 and cc_["close"] < a["open"]:
+                intr = (cc_["close"] - a["close"]) / max(a["open"] - a["close"], 1e-12)
+                st = 2 if intr > 0.6 else 1
+                res.append({"pattern": "piercing_line", "bar_type": "double", "signal": "bullish", "strength": st, "bars_back": k,
+                            "pattern_details": {"intrusion_pct": round(intr * 100, 1)}})
+            if a["direction"] == 1 and cc_["direction"] == -1 and a["open"] <= cc_["close"] and cc_["high"] > a["high"] and a["high"] < cc_["open"]:
+                intr = (a["high"] - cc_["close"]) / max(a["high"] - a["low"], 1e-12)
+                st = 2 if intr > 0.6 else 1
+                res.append({"pattern": "dark_cloud_cover", "bar_type": "double", "signal": "bearish", "strength": st, "bars_back": k,
+                            "pattern_details": {"intrusion_pct": round(intr * 100, 1)}})
+            if a["direction"] == 1 and b["direction"] == 1 and cc_["direction"] == 1 and b["body"] > 0 and cc_["body"] > 0 and b["open"] > a["low"] and cc_["open"] > b["low"] and b["close"] > a["close"] and cc_["close"] > b["close"]:
+                big = a["body_pct"] > 0.6 and b["body_pct"] > 0.6 and cc_["body_pct"] > 0.6
+                st = 2 if big else 1
+                if a["period_pct_low"] <= 0.3:
+                    st = min(st + 1, 3)
+                res.append({"pattern": "three_white_soldiers", "bar_type": "triple", "signal": "bullish", "strength": st, "bars_back": k})
+            if a["direction"] == -1 and b["direction"] == -1 and cc_["direction"] == -1 and b["body"] > 0 and cc_["body"] > 0 and b["open"] < a["high"] and cc_["open"] < b["high"] and b["close"] < a["close"] and cc_["close"] < b["close"]:
+                big = a["body_pct"] > 0.6 and b["body_pct"] > 0.6 and cc_["body_pct"] > 0.6
+                st = 2 if big else 1
+                if a["period_pct_high"] >= 0.7:
+                    st = min(st + 1, 3)
+                res.append({"pattern": "three_black_crows", "bar_type": "triple", "signal": "bearish", "strength": st, "bars_back": k})
+        return res
+
+    pa = []
+    for ci in ca:
+        sp = _single(ci, ci["period_pct_high"])
+        if sp:
+            pat = {
+                "pattern": sp["pattern"], "bar_type": "single",
+                "signal": "bullish" if sp["signal"] > 0 else "bearish" if sp["signal"] < 0 else "neutral",
+                "strength": sp["strength"], "bars_back": ds - ci["idx"], "date": ci["date"],
+                "signal_detail": f"{sp['pattern'].replace('_', ' ').title()}: {'bullish reversal' if sp['signal'] > 0 else 'bearish reversal' if sp['signal'] < 0 else 'neutral / indecision'}" + (f" ({sp.get('sub', '')})" if sp.get("sub") else ""),
+            }
+            if ci["volume"] is not None and ci["volume"] > 0:
+                pat["volume"] = ci["volume"]
+            pa.append(pat)
+    if n >= 2:
+        for mi in _multi(ca, n):
+            bi = mi.get("bars_back", 0)
+            pat = {
+                "pattern": mi["pattern"], "bar_type": mi["bar_type"], "signal": mi["signal"],
+                "strength": mi["strength"], "bars_back": bi,
+                "date": ca[ds - bi]["date"] if (ds - bi) >= 0 else "",
+            }
+            if "pattern_details" in mi:
+                pat["pattern_details"] = mi["pattern_details"]
+            pat["signal_detail"] = f"{mi['pattern'].replace('_', ' ').title()}: {mi['signal']} signal"
+            pa.append(pat)
+
+    pa.sort(key=lambda x: (-x["strength"], x["bars_back"]))
+    tb = sum(1 for p in pa if p["signal"] == "bullish")
+    tbe = sum(1 for p in pa if p["signal"] == "bearish")
+    tn = sum(1 for p in pa if p["signal"] == "neutral")
+    sb = sum(p["strength"] for p in pa if p["signal"] == "bullish")
+    sbe = sum(p["strength"] for p in pa if p["signal"] == "bearish")
+    result["total_bullish"] = tb
+    result["total_bearish"] = tbe
+    result["total_neutral"] = tn
+    result["signal_score_bullish"] = sb
+    result["signal_score_bearish"] = sbe
+    result["signal"] = "bullish" if sb > sbe + 2 else "bearish" if sbe > sb + 2 else "slightly_bullish" if sb > sbe else "slightly_bearish" if sbe > sb else "neutral"
+    result["patterns"] = pa
+    return result
+
+
 def technical_indicators(query: str, days: int = 90) -> dict:
     """Рассчитать технические индикаторы из дневных свечей (OHLCV).
 
@@ -3135,6 +3595,64 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
     result["patterns"] = patterns_all
 
     return result
+
+
+def technical_indicators_multi_tf(query: str, days: int = 90) -> dict:
+    """Рассчитать технические индикаторы сразу на трёх таймфреймах.
+
+    Для period=90: hourly — 90 свечей (90 часов), daily — 90 свечей, weekly — 90 свечей.
+    """
+    candles = {"hourly": None, "daily": None, "weekly": None}
+    for tf, iv in _TF_CONFIG:
+        data = _fetch_query_candles(query, days, iv)
+        if "error" not in data:
+            candles[tf] = data
+    secid = ""
+    for v in candles.values():
+        if v:
+            secid = v["secid"]
+            break
+    results = {}
+    for tf in ("hourly", "daily", "weekly"):
+        c = candles[tf]
+        if not c or "error" in c:
+            results[tf] = c if c else {"error": "failed to fetch", "secid": secid, "interval": tf}
+            continue
+        rows = c["rows"]
+        closes = [r["close"] for r in rows if r.get("close")]
+        if len(closes) < 14:
+            results[tf] = {"error": "недостаточно данных", "secid": secid, "interval": tf, "trading_days": len(closes)}
+            continue
+        highs = [r["high"] for r in rows if r.get("high")]
+        lows = [r["low"] for r in rows if r.get("low")]
+        volumes = [r["volume"] for r in rows if r.get("volume")]
+        results[tf] = _compute_technical_indicators(closes, highs, lows, volumes, secid, days, tf)
+    return {"secid": secid, "period": days, "timeframes": results}
+
+
+def candlestick_analysis_multi_tf(query: str, days: int = 90) -> dict:
+    """Распознавание свечных паттернов сразу на трёх таймфреймах.
+
+    Для period=90: hourly — 90 свечей (90 часов), daily — 90 свечей, weekly — 90 свечей.
+    """
+    candles = {"hourly": None, "daily": None, "weekly": None}
+    for tf, iv in _TF_CONFIG:
+        data = _fetch_query_candles(query, days, iv)
+        if "error" not in data:
+            candles[tf] = data
+    secid = ""
+    for v in candles.values():
+        if v:
+            secid = v["secid"]
+            break
+    results = {}
+    for tf in ("hourly", "daily", "weekly"):
+        c = candles[tf]
+        if not c or "error" in c:
+            results[tf] = c if c else {"error": "failed to fetch", "secid": secid, "interval": tf}
+            continue
+        results[tf] = _compute_candlestick_analysis(c["rows"], secid, days, tf)
+    return {"secid": secid, "period": days, "timeframes": results}
 
 
 def _parse_board_etf(row: dict) -> dict | None:
