@@ -453,7 +453,6 @@ _CANDLE_INTERVALS = [
 ]
 
 _INTERVAL_ALIASES = {
-    "1": "1", "min": "1", "minute": "1", "мин": "1", "минута": "1",
     "10": "10", "10min": "10", "10мин": "10",
     "60": "60", "hour": "60", "h": "60", "час": "60",
     "24": "24", "day": "24", "d": "24", "д": "24", "день": "24",
@@ -477,7 +476,6 @@ def _auto_interval(frm: str, till: str) -> str:
 
 
 _CANDLE_ESTIMATE_PER_DAY: dict[str, float] = {
-    "1":  1000,   # ~1000 минутных свечей в торгуемый день
     "10": 100,
     "60": 14,
     "24": 1,
@@ -499,7 +497,7 @@ def _estimate_candle_count(frm: str, till: str, interval: str) -> int:
 
 def candles(query: str, frm: str, till: str, interval: str = "",
             allow_big_output: bool = False) -> list[dict]:
-    """Свечи OHLCV. interval: 1,10,60(час),24(день),7(нед),31(мес),4(кв).
+    """Свечи OHLCV. interval: 10,60(час),24(день),7(нед),31(мес),4(кв).
 
     Пустой query — ошибка. Пустой или некорректный interval — авто-выбор (≤50 свечей).
     Принимает альтернативные наименования: day/день, week/неделя, month/мес, quarter/кв, hour/час.

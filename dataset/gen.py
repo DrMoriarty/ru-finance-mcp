@@ -55,7 +55,7 @@ TOOLS = [
       ("query", "frm", "till"),
       query=("string", "Тикер/ISIN"), frm=("string", "Дата начала YYYY-MM-DD"),
       till=("string", "Дата конца YYYY-MM-DD"),
-      interval=("string", "Интервал: 1,10,60,24,7,31,4 (по умолч. 24 — день)"),
+      interval=("string", "Интервал: 10,60,24,7,31,4 (по умолч. 24 — день)"),
       allow_big_output=("boolean", "Разрешить большой ответ (по умолч. False)")),
     T("moex_history", "Дневная история торгов (компактная: дата, закрытие, объём).",
       ("query", "frm", "till"),

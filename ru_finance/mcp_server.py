@@ -416,7 +416,7 @@ def moex_candles(query: str, frm: str, till: str, interval: str = "",
                  allow_big_output: bool = False) -> list[dict]:
     """OHLCV candles for a period.
 
-    Args: query (required, non-empty); interval: 1,10,60(hour/час),24(day/день),
+    Args: query (required, non-empty); interval: 10,60(hour/час),24(day/день),
     7(week/неделя),31(month/мес),4(quarter/кв); empty=auto-select (≤50 candles).
     frm/till ('YYYY-MM-DD').
     allow_big_output: False by default — returns error if >100 candles estimated.
@@ -2180,7 +2180,6 @@ def ref_candle_intervals() -> dict:
     return {
         "intervals": [
             {"code": "",   "label": "auto (≤50 candles)"},
-            {"code": "1",  "label": "1 minute",  "minutes": 1},
             {"code": "10", "label": "10 minutes", "minutes": 10},
             {"code": "60", "label": "1 hour",     "minutes": 60},
             {"code": "24", "label": "1 day",      "minutes": 1440},

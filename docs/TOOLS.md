@@ -52,7 +52,7 @@
 
 ### 🟢 `moex_candles(query, frm, till, interval="24")`
 Свечи OHLCV за период.
-- **Принимает:** `query`; `frm`/`till` (`"YYYY-MM-DD"`); `interval` — `1,10,60`(час)`,24`(день)`,7`(нед)`,31`(мес)`,4`(кв).
+- **Принимает:** `query`; `frm`/`till` (`"YYYY-MM-DD"`); `interval` — `10,60`(час)`,24`(день)`,7`(нед)`,31`(мес)`,4`(кв).
 - **Возвращает:** список `{begin, open, high, low, close, value, volume}`.
 - **Пример:** `moex_candles("SBER","2026-06-22","2026-06-26","24")`
 
