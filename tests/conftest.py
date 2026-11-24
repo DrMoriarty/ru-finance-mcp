@@ -2,6 +2,13 @@ from datetime import date
 
 import pytest
 
+# ── Мокинг сети/ретраев ──
+@pytest.fixture
+def fast_retries(monkeypatch):
+    """Убрать sleep из циклов ретраев ru_finance.session (тесты не ждут 0.5*i сек)."""
+    monkeypatch.setattr("ru_finance.session.time.sleep", lambda _s: None)
+
+
 # ── Даты ──
 @pytest.fixture
 def valdate():
