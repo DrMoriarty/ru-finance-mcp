@@ -19,6 +19,9 @@ from ru_finance.bonds import (
     twist_scenarios,
     years_to_maturity,
 )
+# Фикстуры краевых случаев (conftest.py не меняем) — импорт затеняет
+# одноимённые фикстуры conftest только в этом модуле, значения те же.
+from fixtures_edge import amortization_schedule, maturity_10y  # noqa: F401
 
 
 # ═══════════════════════════ helpers ═══════════════════════════
@@ -450,3 +453,154 @@ class TestSyntheticYield:
         assert "buy_price_rub" in result
         assert "total_return_pct" in result
         assert "coupon_count" in result
+
+
+# ═══════════════════════════ краевые случаи ═══════════════════════════
+
+
+class TestZeroCouponEdge:
+    """Zero-coupon: единственный CF в погашение — цена и дюрация считаются точно."""
+
+    def test_price_exact_dcf(self, valdate, maturity_1y, face):
+        """Цена = face/(1+ytm/freq)^(freq·t) с точностью до копейки."""
+        ytm = 10.0
+        p = dirty_price(valdate, maturity_1y, 0.0, ytm, face, freq=2)
+        t = (maturity_1y - valdate).days / 365
+        expected = face / (1 + ytm / 100 / 2) ** (2 * t)
+        assert abs(p - expected) < 0.01
+
+    def test_duration_equals_maturity(self, valdate, maturity_1y, face):
+        """Дюрация Маколея = срок до погашения (весь вес на последнем CF)."""
+        dur = macaulay_duration(valdate, maturity_1y, 0.0, 10.0, face)
+        t = (maturity_1y - valdate).days / 365
+        assert abs(dur - round(t, 2)) < 0.01
+
+    def test_convexity_positive_and_finite(self, valdate, maturity_1y, face):
+        cx = convexity(valdate, maturity_1y, 0.0, 10.0, face)
+        assert cx > 0
+
+
+class TestNegativeYTM:
+    """Отрицательная доходность: цена выше номинала, математика не ломается."""
+
+    def test_zero_coupon_above_face(self, valdate, maturity_1y, face):
+        """YTM=-5% на zero-coupon → цена выше номинала (точная формула)."""
+        p = dirty_price(valdate, maturity_1y, 0.0, -5.0, face, freq=2)
+        t = (maturity_1y - valdate).days / 365
+        expected = face / (1 - 0.05 / 2) ** (2 * t)
+        assert abs(p - expected) < 0.01
+        assert p > face
+
+    def test_coupon_bond_above_face(self, valdate, maturity_3y, coupon_rate, face):
+        p = dirty_price(valdate, maturity_3y, coupon_rate, -2.0, face)
+        assert p > face
+
+    def test_duration_still_below_maturity(self, valdate, maturity_3y, coupon_rate, face):
+        """Дюрация при отрицательной YTM остаётся валидной: (0, срок)."""
+        dur = macaulay_duration(valdate, maturity_3y, coupon_rate, -1.0, face)
+        assert 0 < dur < (maturity_3y - valdate).days / 365
+
+    def test_zero_coupon_duration_immune_to_ytm(self, valdate, maturity_1y, face):
+        """У zero-coupon дюрация = срок при любой YTM, включая отрицательную."""
+        for ytm in (-5.0, 0.0, 10.0):
+            dur = macaulay_duration(valdate, maturity_1y, 0.0, ytm, face)
+            assert abs(dur - 1.0) < 0.01
+
+
+class TestConvexityAsymmetry300bp:
+    """±300 б.п. — документированная механика (AGENTS.md): положительная
+    выпуклость делает рост цены при снижении ставки больше падения при росте,
+    и поправка ½·C·(Δy)² улучшает линейную аппроксимацию по дюрации."""
+
+    ytm = 8.0
+    coupon = 7.0
+    dy_pp = 3.0
+
+    def test_gain_exceeds_loss(self, valdate, maturity_10y, face):
+        p0 = dirty_price(valdate, maturity_10y, self.coupon, self.ytm, face)
+        gain = dirty_price(valdate, maturity_10y, self.coupon, self.ytm - self.dy_pp, face) - p0
+        loss = p0 - dirty_price(valdate, maturity_10y, self.coupon, self.ytm + self.dy_pp, face)
+        assert gain > loss > 0
+
+    def test_convexity_correction_improves_approximation(self, valdate, maturity_10y, face):
+        """ΔP/P ≈ −D_mod·Δy + ½·C·(Δy)²: с конвексностью заметно точнее."""
+        dy = self.dy_pp / 100
+        mod_dur = (macaulay_duration(valdate, maturity_10y, self.coupon, self.ytm, face)
+                   / (1 + self.ytm / 100 / 2))
+        cx = convexity(valdate, maturity_10y, self.coupon, self.ytm, face)
+        p0 = dirty_price(valdate, maturity_10y, self.coupon, self.ytm, face)
+        actual_dn = (dirty_price(valdate, maturity_10y, self.coupon,
+                                 self.ytm - self.dy_pp, face) - p0) / p0
+        dur_only = -mod_dur * (-dy)  # линейная оценка роста цены
+        with_cx = dur_only + 0.5 * cx * dy ** 2
+        assert abs(actual_dn - with_cx) < abs(actual_dn - dur_only)
+        assert abs(actual_dn - with_cx) < 0.01  # ошибка < 1 п.п.
+
+    def test_loss_milder_than_linear(self, valdate, maturity_10y, face):
+        """При росте ставки падение цены меньше линейной оценки (та же выпуклость)."""
+        dy = self.dy_pp / 100
+        mod_dur = (macaulay_duration(valdate, maturity_10y, self.coupon, self.ytm, face)
+                   / (1 + self.ytm / 100 / 2))
+        cx = convexity(valdate, maturity_10y, self.coupon, self.ytm, face)
+        p0 = dirty_price(valdate, maturity_10y, self.coupon, self.ytm, face)
+        actual_up = (dirty_price(valdate, maturity_10y, self.coupon,
+                                 self.ytm + self.dy_pp, face) - p0) / p0
+        with_cx = -mod_dur * dy + 0.5 * cx * dy ** 2
+        assert abs(actual_up - with_cx) < 0.01
+        assert actual_up > -mod_dur * dy  # выпуклость смягчает падение
+
+
+class TestAmortization:
+    """Амортизация тела: купон убывает по мере погашения номинала."""
+
+    flat_rate = 10.5  # средняя ставка расписания — плоский эквивалент
+
+    def test_duration_shorter_than_flat_equivalent(self, valdate, maturity_3y, ytm, face,
+                                                   amortization_schedule):
+        """Тот же суммарный купон, но CF смещены к началу → дюрация короче."""
+        dur_amort = macaulay_duration(valdate, maturity_3y, self.flat_rate, ytm, face,
+                                      coupon_schedule=amortization_schedule)
+        dur_flat = macaulay_duration(valdate, maturity_3y, self.flat_rate, ytm, face)
+        assert 0 < dur_amort < dur_flat
+
+    def test_front_loaded_cashflows_worth_more(self, valdate, maturity_3y, ytm, face,
+                                               amortization_schedule):
+        """Ранние деньги стоят дороже: при равном суммарном купоне цена выше."""
+        p_amort = dirty_price(valdate, maturity_3y, self.flat_rate, ytm, face,
+                              coupon_schedule=amortization_schedule)
+        p_flat = dirty_price(valdate, maturity_3y, self.flat_rate, ytm, face)
+        assert p_amort > p_flat > 0
+
+    def test_schedule_actually_applied(self, valdate, maturity_3y, ytm, face,
+                                       amortization_schedule):
+        """Расписание влияет на цену: не совпадает ни с плоским min, ни с max ставкой."""
+        p_amort = dirty_price(valdate, maturity_3y, self.flat_rate, ytm, face,
+                              coupon_schedule=amortization_schedule)
+        p_min = dirty_price(valdate, maturity_3y, 9.0, ytm, face)
+        p_max = dirty_price(valdate, maturity_3y, 12.0, ytm, face)
+        assert p_min < p_amort < p_max
+
+
+class TestDeepDiscount:
+    """Глубокий дисконт: цена далеко ниже номинала, но положительна и валидна."""
+
+    def test_price_far_below_face(self, valdate, maturity_10y, face):
+        """Купон 5% при YTM 25% на 10 лет → цена < 50% номинала."""
+        p = dirty_price(valdate, maturity_10y, 5.0, 25.0, face)
+        assert 0 < p < face * 0.5
+
+    def test_duration_positive_well_below_maturity(self, valdate, maturity_10y, face):
+        """Купоны всё ещё дают заметный вес: дюрация < 0.7 срока."""
+        years = (maturity_10y - valdate).days / 365
+        dur = macaulay_duration(valdate, maturity_10y, 5.0, 25.0, face)
+        assert 0 < dur < 0.7 * years
+
+    def test_price_monotonic_in_ytm(self, valdate, maturity_10y, face):
+        """Монотонность сохраняется и в глубоком дисконте."""
+        p_low = dirty_price(valdate, maturity_10y, 5.0, 20.0, face)
+        p_high = dirty_price(valdate, maturity_10y, 5.0, 30.0, face)
+        assert p_low > p_high > 0
+
+    def test_convexity_still_positive(self, valdate, maturity_10y, face):
+        cx = convexity(valdate, maturity_10y, 5.0, 25.0, face)
+        assert cx > 0
