@@ -3,7 +3,11 @@ import math
 
 import pytest
 
-from ru_finance.rate import _fwd, _nss, _y
+from ru_finance.rate import _fwd, _nss, _y, curve_yield, rate_expectations
+
+# Фикстуры краевых случаев (conftest.py не меняем) — импорт затеняет
+# одноимённые фикстуры conftest только в этом модуле, значения те же.
+from fixtures_edge import curve_points, nss_params, rate_env  # noqa: F401
 
 
 # ═══════════════════════════ _nss ═══════════════════════════
@@ -150,3 +154,112 @@ class TestFwd:
         expected = ((1 + z2) ** 2 / (1 + z1) ** 1) ** (1 / 1) - 1
         result = _fwd(curve_points, {}, 1.0, 2.0)
         assert abs(result - round(expected * 100, 2)) < 0.01
+
+
+# ═══════════════════════════ curve_yield: экстраполяция ═══════════════════════════
+
+
+class TestCurveYieldExtrapolation:
+    """curve_yield вне диапазона узлов КБД (0.25–20 лет): экстраполяция за 20 лет —
+    задокументированная возможность NSS-модели (AGENTS.md)."""
+
+    def test_nss_method_beyond_20y(self, rate_env):
+        r = curve_yield(25.0)
+        assert r["method"] == "NSS"
+        assert r["years"] == 25.0
+        assert r["yield"] > 0
+        assert r["as_of"] == "2024-06-15"
+
+    def test_at_last_node_matches_nss(self, rate_env, nss_params):
+        r = curve_yield(20.0)
+        assert abs(r["yield"] - round(_nss(nss_params, 20.0), 3)) < 0.001
+
+    def test_monotonic_smooth_decay_beyond_20y(self, nss_params):
+        """За 20 лет кривая гладко затухает к уровню B1 (гауссовы поправки умирают),
+        без взрыва и осцилляций."""
+        ys = [_nss(nss_params, t) for t in (20.0, 21.0, 25.0, 30.0, 50.0)]
+        assert all(a > b for a, b in zip(ys, ys[1:]))
+        level = 100 * (math.exp(nss_params["B1"] / 10000) - 1)
+        assert ys[-1] > level  # сходимость к уровню сверху, без перескока
+
+    def test_extrapolation_reasonable(self, nss_params):
+        """Значение на 30 годах отличается от 20 лет меньше чем на 1 п.п."""
+        y20, y30 = _nss(nss_params, 20.0), _nss(nss_params, 30.0)
+        assert abs(y30 - y20) < 1.0
+
+    def test_fallback_interp_flat_beyond_last_node(self, curve_points, monkeypatch):
+        """Без params — фоллбэк на узлы: плоская экстраполяция последним узлом."""
+        from ru_finance import rate as rate_mod
+
+        monkeypatch.setattr(
+            rate_mod, "_curve",
+            lambda engine="stock": (curve_points, {}, "2024-06-15"))
+        r = rate_mod.curve_yield(25.0)
+        assert r["method"] == "interp"
+        assert abs(r["yield"] - 11.7) < 0.001
+
+
+# ═══════════════════════════ rate_expectations: деадбенд и сигналы ═══════════════════════════
+
+
+class TestRateExpectationsDeadband:
+    """Машинная метка read с деадбендом ±0.25 пп (AGENTS.md). В коде строгие
+    неравенства: ровно ±0.25 пп — внутри деадбенда → 'flat'; за границей —
+    'cuts_priced' / 'hikes_priced'."""
+
+    @pytest.mark.parametrize("delta,expected", [
+        (-0.26, "cuts_priced"),
+        (-0.25, "flat"),
+        (0.0, "flat"),
+        (0.25, "flat"),
+        (0.26, "hikes_priced"),
+    ])
+    def test_read_label_at_deadband_edges(self, rate_env, nss_params, delta, expected):
+        y1 = _nss(nss_params, 1.0)
+        res = rate_expectations(key_rate=y1 - delta)
+        s = res["signals"]
+        assert s["read"] == expected
+        assert s["short_vs_key_1y"] == delta  # спред округляется ровно в delta
+
+    def test_no_network_fields(self, rate_env):
+        """Мокнутые данные проходят насквозь: ставки ЦБ, as_of, note."""
+        res = rate_expectations()
+        assert res["key_rate"] == 16.0
+        assert res["ruonia"] == 15.8
+        assert res["as_of"] == "2024-06-15"
+        assert "срочную премию" in res["note"]
+
+
+class TestForwardsAndAnchor:
+    """Форварды fwd_* и якорь short_vs_ruonia_1y на условных nss_params."""
+
+    def test_short_vs_ruonia_anchor(self, rate_env, nss_params):
+        res = rate_expectations()
+        y1 = _nss(nss_params, 1.0)
+        assert res["signals"]["short_vs_ruonia_1y"] == round(y1 - 15.8, 2)
+
+    def test_fwd_values_match_formula(self, rate_env, nss_params):
+        s = rate_expectations()["signals"]
+        pairs = {"fwd_1y_in_1y": (1, 2), "fwd_1y_in_2y": (2, 3), "fwd_3m_in_1y": (1, 1.25)}
+        for name, (t1, t2) in pairs.items():
+            assert s[name] == _fwd([], nss_params, t1, t2)
+
+    def test_forwards_positive_and_finite(self, rate_env):
+        s = rate_expectations()["signals"]
+        for name in ("fwd_1y_in_1y", "fwd_1y_in_2y", "fwd_3m_in_1y"):
+            assert math.isfinite(s[name])
+            assert s[name] > 0
+
+    def test_fwd_1y_in_1y_manual_computation(self, nss_params):
+        """Независимая проверка формулы форварда на NSS-доходностях."""
+        z1 = _nss(nss_params, 1.0) / 100
+        z2 = _nss(nss_params, 2.0) / 100
+        expected = round((((1 + z2) ** 2 / (1 + z1) ** 1) ** (1 / (2 - 1)) - 1) * 100, 2)
+        assert _fwd([], nss_params, 1, 2) == expected
+
+    def test_fwd_inverted_flag_consistent(self, rate_env, nss_params):
+        """inverted = y2 < y025 — согласовано с NSS-доходностями."""
+        res = rate_expectations()
+        y025 = _nss(nss_params, 0.25)
+        y2 = _nss(nss_params, 2.0)
+        assert res["signals"]["inverted"] == (y2 < y025)
