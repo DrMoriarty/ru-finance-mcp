@@ -2688,12 +2688,12 @@ def _compute_candlestick_analysis(candles_rows, secid, period_days, interval) ->
             idx = nb - 1 - k
             p, q = c[idx - 1], c[idx]
             cap = abs(q["body"]) / max(p["body"], 1e-12)
-            if p["direction"] == -1 and q["direction"] == 1 and p["close"] >= q["close"] and p["open"] <= q["open"] and cap >= 1.1:
+            if p["direction"] == -1 and q["direction"] == 1 and q["open"] <= p["close"] and q["close"] >= p["open"] and cap >= 1.1:
                 st = 2 if cap >= 1.5 else 1
                 if q["period_pct_low"] <= 0.3:
                     st = min(st + 1, 3)
                 res.append({"pattern": "bullish_engulfing", "bar_type": "double", "signal": "bullish", "strength": st, "bars_back": k})
-            if p["direction"] == 1 and q["direction"] == -1 and p["close"] <= q["close"] and p["open"] >= q["open"] and cap >= 1.1:
+            if p["direction"] == 1 and q["direction"] == -1 and q["open"] >= p["close"] and q["close"] <= p["open"] and cap >= 1.1:
                 st = 2 if cap >= 1.5 else 1
                 if q["period_pct_high"] >= 0.7:
                     st = min(st + 1, 3)
@@ -3388,7 +3388,7 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
 
             # Bullish Engulfing
             if (p["direction"] == -1 and q["direction"] == 1 and
-                    p["close"] >= q["close"] and p["open"] <= q["open"] and
+                    q["open"] <= p["close"] and q["close"] >= p["open"] and
                     ca_p >= 1.1):
                 strength = 2 if ca_p >= 1.5 else 1
                 if q["period_pct_low"] <= 0.3:
@@ -3398,7 +3398,7 @@ def candlestick_analysis(query: str, days: int = 90) -> dict:
 
             # Bearish Engulfing
             if (p["direction"] == 1 and q["direction"] == -1 and
-                    p["close"] <= q["close"] and p["open"] >= q["open"] and
+                    q["open"] >= p["close"] and q["close"] <= p["open"] and
                     ca_p >= 1.1):
                 strength = 2 if ca_p >= 1.5 else 1
                 if q["period_pct_high"] >= 0.7:
