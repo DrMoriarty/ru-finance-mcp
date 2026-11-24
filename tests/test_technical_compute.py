@@ -411,10 +411,6 @@ class TestEngulfingAndHarami:
         assert hits[-1]["signal"] == "bearish"
         assert hits[-1]["bars_back"] == 0
 
-    @pytest.mark.xfail(reason="баг в moex.py: условия bullish_engulfing "
-                              "(p.close >= q.close и p.open <= q.open при q bullish) "
-                              "геометрически противоречивы — паттерн не может сработать никогда",
-                       strict=True)
     def test_bullish_engulfing(self):
         # классическое бычье поглощение: q перекрывает тело p с обеих сторон
         rows = flat_fillers(3) + [
@@ -428,10 +424,6 @@ class TestEngulfingAndHarami:
         assert hits[-1]["bars_back"] == 0
         assert 1 <= hits[-1]["strength"] <= 3
 
-    @pytest.mark.xfail(reason="баг в moex.py: условия bearish_engulfing "
-                              "(p.close <= q.close и p.open >= q.open при q bearish) "
-                              "геометрически противоречивы — паттерн не может сработать никогда",
-                       strict=True)
     def test_bearish_engulfing(self):
         rows = flat_fillers(3) + [
             mk(100, 106, 99.5, 105, i=3),    # bullish
