@@ -2,7 +2,9 @@
 name = "ru-finance"
 version = "0.1.0"
 description = "Доменный слой и MCP-сервер для анализа портфеля (MOEX + ЦБ РФ)"
-requires-python = ">=3.11"
+# <3.15: pandas 3.0.x не поддерживает Python 3.15 (классификаторы — до 3.14),
+# её cp315-колесо сегфолит на любом построении DatetimeIndex (pd.date_range и др.).
+requires-python = ">=3.11,<3.15"
 dependencies = [
     "moex>=2.0.0",
     "cbrapi>=0.1.7",
