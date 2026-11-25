@@ -21,3 +21,15 @@ deploy/*.env
 # дублируем игнор, если их случайно скопируют внутрь репо)
 assets.md
 context.md
+.drcode/tasks/
+.drcode/settings.json
+.drcode/mcp.json
+.drcode/mcp-servers.json
+.drcode/github_state.json
+.drcode/search_index.json
+.drcode/code_index.json
+.drcode/worktrees/
+.drcode/merge_reports/
+.drcode/stats.json
+.drcode/pending_notifications.json
+.drcode/goals/*.state.json
