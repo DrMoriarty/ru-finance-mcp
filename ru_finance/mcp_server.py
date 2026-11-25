@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import threading
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon, ToolAnnotations
 
 from . import bonds, cbr, fundamental, moex, option_calc, portfolio, raexpert, rate, smartlab, vsezpif
+from .session import warmup_moex
 
 # ─────────────────────────── Tool Groups & Roles ───────────────────────────
 # Каждый инструмент принадлежит ровно одной группе. Роль = набор групп.
@@ -2474,6 +2476,11 @@ if __name__ == "__main__":
                     await stack.enter_async_context(mgr.run())
                 for mgr in _role_mgrs.values():
                     await stack.enter_async_context(mgr.run())
+                # Прогрев aioboy/moex: загрузка шаблонов и коннектора до
+                # первых запросов, чтобы параллельные to_thread-вызовы не
+                # соревновались за lazy-инициализацию. Ошибка сети старт не
+                # валид — warmup_moex только логирует warning.
+                await asyncio.to_thread(warmup_moex)
                 yield
 
         routes: list[Mount] = [
@@ -2495,4 +2502,7 @@ if __name__ == "__main__":
             log_level=mcp.settings.log_level.lower(),
         )
     else:
+        # stdio: прогрев в фоновом потоке — mcp.run() сразу занимает поток
+        # цикла событий, а lazy-инициализация под lock и так потокобезопасна.
+        threading.Thread(target=warmup_moex, name="moex-warmup", daemon=True).start()
         mcp.run(transport=transport)

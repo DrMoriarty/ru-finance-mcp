@@ -4,6 +4,9 @@
 Часть 2 — сетевые помощники: raw_get (ретраи на responses) и
 singleton get_moex (Moex подменяется фейком, реальной загрузки шаблонов нет).
 """
+import threading
+import time
+
 import pytest
 import requests
 import responses
@@ -151,6 +154,39 @@ class _FakeMoex:
         return False
 
 
+class _SlowMoex:
+    """__enter__ с задержкой — имитация сетевой загрузки шаблонов aioboy."""
+
+    created: list["_SlowMoex"] = []
+
+    def __init__(self, *args, **kwargs):
+        _SlowMoex.created.append(self)
+
+    def __enter__(self):
+        time.sleep(0.1)
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class _FailingMoex:
+    """__enter__ падает (сеть недоступна) — шаблоны не загружаются."""
+
+    created: list["_FailingMoex"] = []
+    entered = 0
+
+    def __init__(self, *args, **kwargs):
+        _FailingMoex.created.append(self)
+
+    def __enter__(self):
+        _FailingMoex.entered += 1
+        raise ConnectionError("iss.moex.com недоступен")
+
+    def __exit__(self, *args):
+        return False
+
+
 def test_get_moex_singleton(monkeypatch):
     monkeypatch.setattr(session, "Moex", _FakeMoex)
     monkeypatch.setattr(session, "_client", None)  # изолируем глобальный синглтон
@@ -162,3 +198,90 @@ def test_get_moex_singleton(monkeypatch):
     assert c1 is c2
     # клиент создаётся ровно один раз — шаблоны aioboy не перезагружаются
     assert len(_FakeMoex.created) == 1
+
+
+def test_get_moex_concurrent_init(monkeypatch):
+    """N потоков одновременно на пустом singleton — ровно одна инициализация.
+
+    Воспроизводит гонку из crash.log: без lock второй поток входил бы в
+    __enter__ параллельно с первым и падал на MappingProxyType-шаблонах.
+    """
+    monkeypatch.setattr(session, "Moex", _SlowMoex)
+    monkeypatch.setattr(session, "_client", None)
+    _SlowMoex.created = []
+
+    n = 8
+    barrier = threading.Barrier(n)
+    results: list = []
+    errors: list[Exception] = []
+
+    def worker():
+        try:
+            barrier.wait()  # все потоки стартуют одновременно
+            results.append(session.get_moex())
+        except Exception as e:  # pragma: no cover — падение означает регрессию
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors
+    assert len(results) == n
+    # все потоки получили один и тот же объект
+    assert all(c is results[0] for c in results)
+    # __enter__ выполнен ровно один раз (не соревновательно)
+    assert len(_SlowMoex.created) == 1
+
+
+def test_get_moex_exception_not_cached(monkeypatch):
+    """Упавший __enter__ не оставляет _client в полуинициализированном виде:
+    singleton остаётся None, следующий вызов повторяет попытку с нуля."""
+    monkeypatch.setattr(session, "Moex", _FailingMoex)
+    monkeypatch.setattr(session, "_client", None)
+    _FailingMoex.created = []
+    _FailingMoex.entered = 0
+
+    with pytest.raises(ConnectionError):
+        session.get_moex()
+
+    assert session._client is None
+    assert len(_FailingMoex.created) == 1
+
+    # после восстановления сети клиент успешно создаётся при новом вызове
+    monkeypatch.setattr(session, "Moex", _FakeMoex)
+    _FakeMoex.created = []
+    client = session.get_moex()
+    assert client is session._client
+    assert len(_FakeMoex.created) == 1
+
+
+# ─────────────────────────── warmup_moex ───────────────────────────
+
+def test_warmup_moex_ok(monkeypatch):
+    monkeypatch.setattr(session, "Moex", _FakeMoex)
+    monkeypatch.setattr(session, "_client", None)
+    _FakeMoex.created = []
+
+    client = session.warmup_moex()
+
+    assert client is session._client
+    assert len(_FakeMoex.created) == 1
+
+
+def test_warmup_moex_failure_does_not_raise(monkeypatch, caplog):
+    """Прогрев при недоступной сети только логирует warning — старт сервера
+    не валидся, клиент будет создан лениво при первом вызове."""
+    monkeypatch.setattr(session, "Moex", _FailingMoex)
+    monkeypatch.setattr(session, "_client", None)
+    _FailingMoex.created = []
+    _FailingMoex.entered = 0
+
+    with caplog.at_level("WARNING", logger="ru_finance.session"):
+        result = session.warmup_moex()
+
+    assert result is None
+    assert session._client is None
+    assert any("Прогрев" in r.message for r in caplog.records)

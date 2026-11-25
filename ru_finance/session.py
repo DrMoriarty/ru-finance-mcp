@@ -35,8 +35,10 @@ TLS / корпоративный MITM-прокси
 """
 from __future__ import annotations
 
+import logging
 import os
 import ssl
+import threading
 import time
 import warnings
 
@@ -46,8 +48,12 @@ from moex import Moex
 
 ISS = "https://iss.moex.com/iss"
 
+logger = logging.getLogger(__name__)
+
 _client: Moex | None = None
+_client_lock = threading.Lock()
 _session: requests.Session | None = None
+_session_lock = threading.Lock()
 _truststore_injected = False
 
 _FALSE = {"0", "false", "no", "off"}
@@ -135,19 +141,23 @@ def get_session() -> requests.Session:
     """Единая requests.Session с TLS-конфигурацией из окружения (lazy init)."""
     global _session
     if _session is None:
-        _maybe_inject_truststore()
-        verify = _resolve_verify()
-        cert = _resolve_cert()
-        s = requests.Session()
-        s.verify = verify
-        if cert is not None:
-            s.cert = cert
-        if verify is False:
-            warnings.warn(
-                "SSL_VERIFY=0: проверка TLS-сертификатов отключена "
-                "(небезопасно, трафик может перехватываться)"
-            )
-        _session = s
+        # double-checked locking: синхронные инструменты идут через
+        # anyio.to_thread параллельно, без lock тут гонка как в get_moex
+        with _session_lock:
+            if _session is None:
+                _maybe_inject_truststore()
+                verify = _resolve_verify()
+                cert = _resolve_cert()
+                s = requests.Session()
+                s.verify = verify
+                if cert is not None:
+                    s.cert = cert
+                if verify is False:
+                    warnings.warn(
+                        "SSL_VERIFY=0: проверка TLS-сертификатов отключена "
+                        "(небезопасно, трафик может перехватываться)"
+                    )
+                _session = s
     return _session
 
 
@@ -253,13 +263,45 @@ def _niquests_connector() -> niquests.Session:
 
 
 def get_moex() -> Moex:
-    """Вернуть singleton-клиент aioboy/moex (шаблоны грузятся один раз)."""
+    """Вернуть singleton-клиент aioboy/moex (шаблоны грузятся один раз).
+
+    Потокобезопасно: синхронные инструменты MCP-сервер выполняет через
+    anyio.to_thread параллельно, поэтому без lock два «первых» вызова
+    одновременно входили бы в ``Moex.__enter__()`` — второй падал бы на
+    повторной загрузке шаблонов (они после первой загрузки замораживаются
+    через MappingProxyType). Double-checked locking: быстрая проверка до
+    lock, повторная — внутри.
+
+    Если ``__enter__()`` упал (сеть) — ``_client`` не присваивается, следующий
+    вызов повторит попытку с чистого листа.
+    """
     global _client
     if _client is None:
-        c = Moex(output_format=".json", connector=_niquests_connector())
-        c.__enter__()  # загрузка шаблонов (сеть, один раз) + открытие коннектора
-        _client = c
+        with _client_lock:
+            if _client is None:
+                c = Moex(output_format=".json", connector=_niquests_connector())
+                c.__enter__()  # загрузка шаблонов (сеть, один раз) + открытие коннектора
+                _client = c  # присваиваем только после успешного __enter__
     return _client
+
+
+def warmup_moex() -> Moex | None:
+    """Прогреть singleton-клиент при старте сервера (сеть, до секунд).
+
+    Ошибка (недоступна сеть и т.п.) не валидация старта: логируется warning,
+    клиент будет создан лениво при первом реальном вызове. Возвращает клиент
+    или None при неудаче.
+    """
+    try:
+        client = get_moex()
+    except Exception as e:
+        logger.warning(
+            "Прогрев aioboy/moex не удался (%s: %s) — клиент создастся "
+            "лениво при первом вызове инструмента", type(e).__name__, e,
+        )
+        return None
+    logger.info("aioboy/moex прогрет: шаблоны загружены, коннектор открыт")
+    return client
 
 
 def exec_template(template_id: int, vars: dict | None = None,
