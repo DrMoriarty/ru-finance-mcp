@@ -398,7 +398,7 @@ async def moex_emitent_bonds(
     duration_years, accrued_int, value_today, ...}]. Sorted by duration.
     """
     await ctx.report_progress(0, 2, "Fetching issuer bonds")
-    return moex.emitent_bonds(query, min_duration, max_duration)
+    return await asyncio.to_thread(moex.emitent_bonds, query, min_duration, max_duration)
 
 
 @_tool()
@@ -542,7 +542,7 @@ async def cointegration_scan(
         sorted by significance.
     """
     await ctx.report_progress(0, 2, "Fetching price data")
-    return moex.cointegration_scan(ticker, candidates, days, method)
+    return await asyncio.to_thread(moex.cointegration_scan, ticker, candidates, days, method)
 
 
 @_tool()
@@ -563,7 +563,7 @@ async def cointegration_matrix(
         sorted by significance.
     """
     await ctx.report_progress(0, 2, "Fetching price data")
-    return moex.cointegration_matrix(tickers, days, method)
+    return await asyncio.to_thread(moex.cointegration_matrix, tickers, days, method)
 
 
 @_tool()
@@ -693,7 +693,7 @@ async def moex_futures_basis(asset_code: str, ctx: Context) -> dict:
     spot_price, basis_pct, annualized_return_pct, open_interest}]}.
     """
     await ctx.report_progress(0, 3, "Fetching futures data")
-    return moex.futures_basis(asset_code)
+    return await asyncio.to_thread(moex.futures_basis, asset_code)
 
 
 @_tool()
@@ -767,7 +767,7 @@ async def smartlab_dividends(ctx: Context, limit: int = 50) -> list[dict]:
     dividend_rub — ₽ per share; yield_pct — dividend yield %.
     """
     await ctx.report_progress(0, 2, "Fetching upcoming dividends")
-    return smartlab.get_upcoming_dividends(limit)
+    return await asyncio.to_thread(smartlab.get_upcoming_dividends, limit)
 
 
 @_tool()
@@ -779,7 +779,7 @@ async def smartlab_dividend_history(ticker: str, ctx: Context) -> list[dict]:
     last_buy_date, close_date, payment_date, price}].
     """
     await ctx.report_progress(0, 2, "Fetching dividend history")
-    return smartlab.get_dividend_history(ticker)
+    return await asyncio.to_thread(smartlab.get_dividend_history, ticker)
 
 
 # ─────────────────── Fundamental screener (smart-lab.ru) ───────────────────
@@ -814,7 +814,8 @@ async def smartlab_stock_screener(
     Returns [{ticker, name, market_cap, ev, revenue, net_income, div_yield, p_e, p_s, p_b, ev_ebitda, ...}].
     """
     await ctx.report_progress(0, 2, "Fetching stock screener from smart-lab.ru")
-    return smartlab.get_stock_screener(
+    return await asyncio.to_thread(
+        smartlab.get_stock_screener,
         period=period,
         report_type=report_type,
         sector_id=sector_id,
@@ -852,7 +853,8 @@ async def smartlab_company_financials(
           fields (list[str] | None, None=[' * ']=all).
     """
     await ctx.report_progress(0, 2, f"Fetching financials for {ticker}")
-    return smartlab.get_company_financials(
+    return await asyncio.to_thread(
+        smartlab.get_company_financials,
         ticker, period=period, standard=standard, fields=fields,
     )
 
@@ -873,7 +875,8 @@ async def smartlab_company_financials_multi(
     """
     n = len(tickers)
     await ctx.report_progress(0, n, f"Fetching financials for {n} companies")
-    return smartlab.get_company_financials_multi(
+    return await asyncio.to_thread(
+        smartlab.get_company_financials_multi,
         tickers, period=period, standard=standard, fields=fields,
     )
 
@@ -890,7 +893,7 @@ async def stock_f_score(ticker: str, ctx: Context,
     Returns: {ticker, name, f_score, max, signals, details, years}.
     """
     await ctx.report_progress(0, 2, f"Calculating F-Score for {ticker}")
-    return fundamental.f_score(ticker, standard=standard)
+    return await asyncio.to_thread(fundamental.f_score, ticker, standard=standard)
 
 
 @_tool()
@@ -904,7 +907,7 @@ async def stock_z_score(ticker: str, ctx: Context,
     Returns: {ticker, name, z_score, zone, thresholds, components, missing, model}.
     """
     await ctx.report_progress(0, 2, f"Calculating Z-Score for {ticker}")
-    return fundamental.z_score(ticker, standard=standard)
+    return await asyncio.to_thread(fundamental.z_score, ticker, standard=standard)
 
 
 @_tool()
@@ -921,7 +924,7 @@ async def stock_peer_comparison(ticker: str, ctx: Context,
     Rank 1 = best in group.
     """
     await ctx.report_progress(0, 2, f"Comparing {ticker} vs peers")
-    return fundamental.peer_comparison(ticker, limit=limit)
+    return await asyncio.to_thread(fundamental.peer_comparison, ticker, limit=limit)
 
 
 @_tool()
@@ -940,7 +943,7 @@ async def dividend_analysis(ticker: str, ctx: Context) -> dict:
               cagr, avg_yield_pct, consistent_years, min_dividend, max_dividend}.
     """
     await ctx.report_progress(0, 2, f"Analysing dividends for {ticker}")
-    return fundamental.dividend_analysis(ticker)
+    return await asyncio.to_thread(fundamental.dividend_analysis, ticker)
 
 
 @_tool()
@@ -959,7 +962,7 @@ async def stock_growth_analysis(ticker: str, ctx: Context,
               series: {revenue, net_income, ebitda, roe, roa, ebitda_margin, net_margin}}.
     """
     await ctx.report_progress(0, 2, f"Analysing growth for {ticker}")
-    return fundamental.growth_analysis(ticker, standard=standard)
+    return await asyncio.to_thread(fundamental.growth_analysis, ticker, standard=standard)
 
 
 @_tool()
@@ -978,7 +981,7 @@ async def bank_benchmark(tickers: list[str], ctx: Context,
     """
     n = len(tickers)
     await ctx.report_progress(0, n, f"Benchmarking {n} banks")
-    return fundamental.bank_benchmark(tickers, standard=standard)
+    return await asyncio.to_thread(fundamental.bank_benchmark, tickers, standard=standard)
 
 
 @_tool()
@@ -993,7 +996,7 @@ async def bank_peer_comparison(ticker: str, ctx: Context) -> dict:
     Returns: {ticker, sector, peer_count, rankings: {metric: {value, rank, of, median, lower_is_better}}}.
     """
     await ctx.report_progress(0, 2, f"Ranking {ticker} vs bank sector")
-    return fundamental.bank_peer_comparison(ticker)
+    return await asyncio.to_thread(fundamental.bank_peer_comparison, ticker)
 
 
 @_tool()
@@ -1010,7 +1013,7 @@ async def company_fundamental_report(ticker: str, ctx: Context,
     Returns: {ticker, metrics: {...}, dividends: {...}, credit_rating: [...], standard}.
     """
     await ctx.report_progress(0, 3, f"Building report for {ticker}")
-    return fundamental.company_report(ticker, standard=standard)
+    return await asyncio.to_thread(fundamental.company_report, ticker, standard=standard)
 
 
 # ─────────────────────────── Credit ratings (raexpert.ru) ───────────────────────────
@@ -1029,7 +1032,7 @@ async def raexpert_rating(query: str, ctx: Context) -> list[dict]:
     Args: query — issuer or bond name ('Сбербанк', 'ЛУКОЙЛ', 'ГТЛК', 'Атомэнергопром'). Case-insensitive.
     """
     await ctx.report_progress(0, 2, "Searching Expert RA ratings")
-    return raexpert.rating_search(query)
+    return await asyncio.to_thread(raexpert.rating_search, query)
 
 
 @_tool()
@@ -1049,7 +1052,8 @@ async def raexpert_emitent_ratings(
     Returns [{name, rating, outlook, date, category, sector?, agency}], sorted by rating.
     """
     await ctx.report_progress(0, 2, "Fetching emitent ratings")
-    return raexpert.emitent_rating_search(rating_min=rating_min, sector=sector)
+    return await asyncio.to_thread(
+        raexpert.emitent_rating_search, rating_min=rating_min, sector=sector)
 
 
 # ─────────────────────────── ZPIF payments (vsezpif.ru) ───────────────────────────
@@ -1078,20 +1082,22 @@ async def zpif_payments(
     """
     await ctx.report_progress(0, 2, "Fetching ZPIF payment calendar")
     if fund_name or isin:
-        payments = vsezpif.get_payments_by_fund(
+        payments = await asyncio.to_thread(
+            vsezpif.get_payments_by_fund,
             fund_name=fund_name,
             isin=isin,
             limit=limit,
         )
-        next_pay = vsezpif.estimate_next_payment(
+        next_pay = await asyncio.to_thread(
+            vsezpif.estimate_next_payment,
             fund_name=fund_name,
             isin=isin,
         )
     else:
-        payments = vsezpif.get_payment_calendar(limit=limit)
+        payments = await asyncio.to_thread(vsezpif.get_payment_calendar, limit=limit)
         next_pay = payments[0] if payments else None
 
-    all_funds = vsezpif.list_funds()
+    all_funds = await asyncio.to_thread(vsezpif.list_funds)
 
     return {
         "payments": payments,
@@ -1191,13 +1197,13 @@ async def bond_report(query: str, ctx: Context) -> dict:
     spread_to_curve (vs G-curve at duration), real_return (vs CPI)}.
     """
     await ctx.report_progress(0, 5, "Fetching bond data")
-    b = moex.bond(query)
+    b = await asyncio.to_thread(moex.bond, query)
     rep: dict = {"bond": b}
     freq = _freq_from_coupon_period(b.get("coupon_period_days"))
 
     await ctx.report_progress(1, 5, "Fetching coupon schedule")
     try:
-        coupon_schedule = moex.future_bond_coupons(query)
+        coupon_schedule = await asyncio.to_thread(moex.future_bond_coupons, query)
     except Exception:
         coupon_schedule = []
     if coupon_schedule:
@@ -1205,7 +1211,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
 
     await ctx.report_progress(2, 5, "Fetching inflation data")
     try:
-        infl_data = cbr.inflation(tail=1)
+        infl_data = await asyncio.to_thread(cbr.inflation, tail=1)
         actual_inflation = infl_data.get("latest_inflation")
     except Exception:
         actual_inflation = None
@@ -1257,7 +1263,7 @@ async def bond_report(query: str, ctx: Context) -> dict:
     await ctx.report_progress(4, 5, "Computing spread to curve")
     if dur and ytm:
         try:
-            cy = rate.curve_yield(dur)
+            cy = await asyncio.to_thread(rate.curve_yield, dur)
             rep["spread_to_curve"] = bonds.spread_to_curve(
                 ytm, dur, cy.get("yield", 0))
         except Exception:
@@ -1292,13 +1298,13 @@ async def bond_synthetic_yield(query: str, horizon_years: float, ctx: Context,
     Returns: {irr_pct, ytm_pct, total_return_pct, annualized_return_pct, note}.
     """
     await ctx.report_progress(0, 3, "Fetching bond data")
-    b = moex.bond(query)
+    b = await asyncio.to_thread(moex.bond, query)
     if not b.get("maturity") or b.get("coupon_pct") is None or not b.get("ytm"):
         return {"error": "insufficient bond data (need maturity, coupon, ytm)"}
     freq = _freq_from_coupon_period(b.get("coupon_period_days"))
     await ctx.report_progress(1, 3, "Fetching coupon schedule")
     try:
-        cs = moex.future_bond_coupons(query)
+        cs = await asyncio.to_thread(moex.future_bond_coupons, query)
     except Exception:
         cs = []
     result = bonds.synthetic_yield(
@@ -1357,7 +1363,8 @@ async def bond_screener(
     duration_years, maturity, offer_date, bond_type, accrued_int, rating, sector, ...}]}.
     """
     await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
-    result = moex.bond_screener(
+    result = await asyncio.to_thread(
+        moex.bond_screener,
         ytm_min=ytm_min, ytm_max=ytm_max,
         coupon_min=coupon_min, coupon_max=coupon_max,
         price_min=price_min, price_max=price_max,
@@ -1420,7 +1427,8 @@ async def bond_prescreener(
     bonds: [{secname, isin}, ...]}.
     """
     await ctx.report_progress(0, 3, "Fetching all bonds from MOEX boards")
-    result = moex.bond_prescreener(
+    result = await asyncio.to_thread(
+        moex.bond_prescreener,
         ytm_min=ytm_min, ytm_max=ytm_max,
         coupon_min=coupon_min, coupon_max=coupon_max,
         price_min=price_min, price_max=price_max,
@@ -1451,7 +1459,7 @@ async def price_volatility(query: str, ctx: Context, days: int = 90, rf_annual: 
     sharpe = (mean_excess_return / volatility) * sqrt(252).
     """
     await ctx.report_progress(0, 2, "Fetching candle data")
-    return moex.price_volatility(query, days, rf_annual)
+    return await asyncio.to_thread(moex.price_volatility, query, days, rf_annual)
 
 
 @_tool()
@@ -1471,7 +1479,7 @@ async def cointegration_test(
          johansen: {trace_stat, max_eigenvalue_stat, cointegrating_vector, ...}}.
     """
     await ctx.report_progress(0, 2, "Fetching price data")
-    return moex.cointegration(ticker1, ticker2, days, method)
+    return await asyncio.to_thread(moex.cointegration, ticker1, ticker2, days, method)
 
 
 @_tool()
@@ -1486,7 +1494,7 @@ async def liquidity_assessment(query: str, ctx: Context, days: int = 90) -> dict
     Spread: Corwin-Schultz from OHLC + actual bid/ask.
     """
     await ctx.report_progress(0, 2, "Fetching market data")
-    return moex.liquidity(query, days)
+    return await asyncio.to_thread(moex.liquidity, query, days)
 
 
 @_tool()
@@ -1499,7 +1507,7 @@ async def technical_indicators(query: str, ctx: Context, days: int = 90) -> dict
     Returns: {secid, period, timeframes: {hourly: {...}, daily: {...}, weekly: {...}}}.
     """
     await ctx.report_progress(0, 2, "Fetching candle data + computing indicators on 3 timeframes")
-    return moex.technical_indicators_multi_tf(query, days)
+    return await asyncio.to_thread(moex.technical_indicators_multi_tf, query, days)
 
 
 @_tool()
@@ -1518,7 +1526,7 @@ async def candlestick_patterns(query: str, ctx: Context, days: int = 90) -> dict
     Returns: {secid, period, timeframes: {hourly: {...}, daily: {...}, weekly: {...}}}.
     """
     await ctx.report_progress(0, 2, "Fetching candle data + scanning patterns on 3 timeframes")
-    return moex.candlestick_analysis_multi_tf(query, days)
+    return await asyncio.to_thread(moex.candlestick_analysis_multi_tf, query, days)
 
 
 # ─────────────────────────── ETF / БПИФ ───────────────────────────
@@ -1534,7 +1542,7 @@ async def etf_fund_info(query: str, ctx: Context) -> dict:
     iNAV — indicative intraday NAV from companion instrument on INAV board.
     """
     await ctx.report_progress(0, 2, "Fetching fund data")
-    return moex.etf_fund_data(query)
+    return await asyncio.to_thread(moex.etf_fund_data, query)
 
 
 @_tool()
@@ -1547,7 +1555,7 @@ async def etf_premium_discount(query: str, ctx: Context) -> dict:
     iNAV comes from companion instrument (TMOS→TMOSA) on INAV board.
     """
     await ctx.report_progress(0, 1, "Fetching iNAV")
-    return moex.etf_premium_discount(query)
+    return await asyncio.to_thread(moex.etf_premium_discount, query)
 
 
 @_tool()
@@ -1563,7 +1571,7 @@ async def etf_tracking_error(query: str, ctx: Context, days: int = 90) -> dict:
     Benchmark is auto-detected from ETF_BENCHMARK_MAP.
     """
     await ctx.report_progress(0, 2, "Fetching fund + benchmark data")
-    return moex.etf_tracking_error(query, days)
+    return await asyncio.to_thread(moex.etf_tracking_error, query, days)
 
 
 @_tool()
@@ -1621,7 +1629,8 @@ async def etf_screener(
     Returns: funds list with full TA, liquidity scores, premium/discount, tracking error.
     """
     await ctx.report_progress(0, 4, "Loading all ETF/БПИФ from MOEX boards")
-    return moex.etf_screener(
+    return await asyncio.to_thread(
+        moex.etf_screener,
         category=category,
         emitent=emitent,
         benchmark=benchmark,
@@ -1678,7 +1687,7 @@ async def rate_expectations(ctx: Context, key_rate: float | None = None) -> dict
     Portfolio interpretation is done by the client/agent.
     """
     await ctx.report_progress(0, 3, "Fetching G-curve data")
-    return rate.rate_expectations(key_rate)
+    return await asyncio.to_thread(rate.rate_expectations, key_rate)
 
 
 @_tool()
