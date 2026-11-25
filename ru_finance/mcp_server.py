@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 from collections import defaultdict
 from datetime import date, datetime
@@ -2446,7 +2447,20 @@ if __name__ == "__main__":
 
         def _make_handler(mgr: StreamableHTTPSessionManager):
             async def _handler(scope, receive, send):
-                await mgr.handle_request(scope, receive, send)
+                try:
+                    await mgr.handle_request(scope, receive, send)
+                except RuntimeError as exc:
+                    # mcp 1.30 bug: a POST racing a session DELETE (e.g. async
+                    # notifications/initialized) gets a 202, then writer.send
+                    # fails with ClosedResourceError and the SDK's error path
+                    # tries to send a 500 over the completed response. The
+                    # client already got its answer and the session is gone
+                    # (next request 404s) — nothing to do but not crash uvicorn.
+                    if "response already completed" not in str(exc):
+                        raise
+                    logging.getLogger(__name__).debug(
+                        "POST raced session DELETE; ignored ClosedResourceError after 202"
+                    )
             return _handler
 
         # ── /mcp — all tools ──
