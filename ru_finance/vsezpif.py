@@ -13,7 +13,7 @@ import time
 from datetime import date, datetime
 from typing import Any
 
-import requests
+from .session import get_session, raise_if_ssl_verify_error
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -45,13 +45,17 @@ def _fetch(path: str, params: dict[str, str] | None = None) -> str:
             return html
 
     url = f"https://vsezpif.ru{path}"
-    resp = requests.get(
-        url,
-        params=params,
-        headers=_HEADERS,
-        timeout=30,
-        allow_redirects=True,
-    )
+    try:
+        resp = get_session().get(
+            url,
+            params=params,
+            headers=_HEADERS,
+            timeout=30,
+            allow_redirects=True,
+        )
+    except Exception as e:
+        raise_if_ssl_verify_error(e)
+        raise
     resp.raise_for_status()
     html = resp.text
 

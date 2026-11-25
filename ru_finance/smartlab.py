@@ -13,8 +13,9 @@ import re
 import time
 from typing import Any
 
-import requests
 from bs4 import BeautifulSoup, Tag
+
+from .session import get_session, raise_if_ssl_verify_error
 
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -40,12 +41,16 @@ def _fetch(path: str) -> str:
         if now - ts < 240 * 60:
             return html
 
-    resp = requests.get(
-        f"https://smart-lab.ru{path}",
-        headers=_HEADERS,
-        timeout=30,
-        allow_redirects=True,
-    )
+    try:
+        resp = get_session().get(
+            f"https://smart-lab.ru{path}",
+            headers=_HEADERS,
+            timeout=30,
+            allow_redirects=True,
+        )
+    except Exception as e:
+        raise_if_ssl_verify_error(e)
+        raise
     resp.raise_for_status()
     html = resp.text
 

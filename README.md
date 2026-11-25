@@ -77,6 +77,19 @@ claude mcp add --transport http ru-finance https://<домен>/mcp
 > [!IMPORTANT]
 > Хост должен иметь сетевой доступ к `iss.moex.com` и `cbr.ru`. Публичный URL стоит защитить токеном авторизации. Полный гайд по деплою (systemd + nginx + TLS + токен) — готовится в `docs/DEPLOY.md`.
 
+### Корпоративный MITM-прокси (TLS)
+
+Если трафик перехватывает корпоративный прокси (ошибка `CERTIFICATE_VERIFY_FAILED: self-signed certificate in certificate chain`), TLS настраивается переменными окружения:
+
+| Переменная | Значение |
+|---|---|
+| `REQUESTS_CA_BUNDLE` | путь к CA-bundle с корневым сертификатом прокси (также читается `CURL_CA_BUNDLE`) |
+| `SSL_TRUSTSTORE=1` | использовать системное хранилище доверия (Keychain и т.п.) через [truststore](https://github.com/sethmlarson/truststore) — если корневой сертификат уже установлен в системе |
+| `REQUESTS_CERT` | клиентский сертификат для mTLS: путь к PEM или `cert.pem,key.pem` |
+| `SSL_VERIFY=0` | отключить проверку сертификата (не рекомендуется, логирует предупреждение) |
+
+Ошибка верификации сертификата поднимается как `SSLVerifyFailed` с подсказкой про эти переменные — сырой трейсбек не показывается.
+
 ## Документация
 
 | Файл | Назначение |

@@ -12,8 +12,9 @@ import time
 
 import cbrapi
 import pandas as pd
-import requests
 from bs4 import BeautifulSoup
+
+from .session import get_session, raise_if_ssl_verify_error
 
 
 def _ser(s: pd.Series, tail: int) -> dict:
@@ -150,7 +151,11 @@ def _fetch_inflation(first_date: str | None, last_date: str | None) -> list[dict
     params["UniDbQuery.From"] = _to_cbr(first_date or default_from)
     params["UniDbQuery.To"] = _to_cbr(last_date or default_to)
 
-    resp = requests.get(_INFL_URL, params=params, headers=_INFL_HEADERS, timeout=30)
+    try:
+        resp = get_session().get(_INFL_URL, params=params, headers=_INFL_HEADERS, timeout=30)
+    except Exception as e:
+        raise_if_ssl_verify_error(e)
+        raise
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "lxml")

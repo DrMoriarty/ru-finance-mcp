@@ -1,7 +1,7 @@
 """Модуль ru_finance/cbr.py на локальных фикстурах (без сети).
 
 Тестируются чистые вспомогательные функции (_parse_ru_float, _ser, _df) и
-парсинг инфляции в _fetch_inflation — через подмену requests.get локальной
+парсинг инфляции в _fetch_inflation — через подмену get_session() локальной
 HTML-фикстурой (сеть не дёргается). HTTP-функции (key_rate, ruonia, currency
 и т.д.) — тонкие обёртки над cbrapi, без моков не тестируются и здесь не
 трогаются.
@@ -173,9 +173,9 @@ def test_df_non_string_columns():
 
 
 # ────────────────────────── _fetch_inflation ──────────────────────────
-# Парсинг вплетён в fetch (requests.get → BeautifulSoup → разбор строк в одном
+# Парсинг вплетён в fetch (get_session().get → BeautifulSoup → разбор строк в одном
 # теле функции), чистую функцию «HTML → rows» выделить нельзя — см. отчёт.
-# Тестируем доступную часть: подменяем requests.get локальной фикстурой.
+# Тестируем доступную часть: подменяем get_session() локальной фикстурой.
 
 class _FakeResponse:
     def __init__(self, text: str):
@@ -202,7 +202,11 @@ def _patch_get(monkeypatch, html, calls):
         calls.append((url, params))
         return _FakeResponse(html)
 
-    monkeypatch.setattr(cbr.requests, "get", fake_get)
+    class _FakeSession:
+        get = staticmethod(fake_get)
+
+    # _fetch_inflation берёт сессию из ru_finance.session.get_session
+    monkeypatch.setattr(cbr, "get_session", lambda: _FakeSession())
 
 
 def test_fetch_inflation_parses_fixture(monkeypatch, infl_html):

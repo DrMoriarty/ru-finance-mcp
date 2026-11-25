@@ -23,6 +23,8 @@ from typing import Any
 
 import requests
 
+from .session import get_session, raise_if_ssl_verify_error
+
 USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -320,9 +322,13 @@ _TD_RE = re.compile(r"<td[^>]*>(.*?)</td>", re.DOTALL)
 
 def _fetch_page(path: str, session: requests.Session | None = None) -> str:
     """GET страницы raexpert.ru."""
-    s = session or requests
+    s = session or get_session()
     url = f"https://raexpert.ru{path}"
-    resp = s.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
+    try:
+        resp = s.get(url, headers=_HEADERS, timeout=30, allow_redirects=True)
+    except Exception as e:
+        raise_if_ssl_verify_error(e)
+        raise
     resp.raise_for_status()
     return resp.text
 
@@ -439,8 +445,7 @@ PAGE_HASH_RE = re.compile(r"setRatingPageHash\('([^']+)'\)")
 
 def _fetch_category_ratings(cat_id: str) -> list[dict[str, Any]]:
     """Загрузить все страницы рейтингов одной категории (с пагинацией)."""
-    session = requests.Session()
-    session.headers.update(_HEADERS)
+    session = get_session()  # общая сессия с TLS-конфигурацией из окружения
 
     path = f"/ratings/{cat_id}/"
     html = _fetch_page(path, session)
@@ -457,6 +462,7 @@ def _fetch_category_ratings(cat_id: str) -> list[dict[str, Any]]:
                 session.post(
                     "https://raexpert.ru/ratings/index/ajax-set-rating-page-hash/",
                     data={"rating_page_hash": ph, "CSRFAjaxToken": csrf_token},
+                    headers=_HEADERS,
                     timeout=15,
                 )
                 page_html = _fetch_page(path, session)

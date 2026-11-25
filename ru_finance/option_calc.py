@@ -21,6 +21,8 @@ import time
 
 import requests
 
+from .session import get_session, raise_if_ssl_verify_error
+
 BASE = "https://iss.moex.com/iss/apps/option-calc/v1"
 
 
@@ -47,13 +49,14 @@ def _get(path: str, params: dict | None = None, retries: int = 4) -> dict | list
     last: Exception | None = None
     for i in range(retries):
         try:
-            r = requests.get(url, params=params, timeout=15)
+            r = get_session().get(url, params=params, timeout=15)
             if not r.ok:
                 raise requests.HTTPError(_extract_error(r), response=r)
             return r.json()
         except requests.HTTPError:
             raise  # no retry on HTTP errors
         except Exception as e:
+            raise_if_ssl_verify_error(e)
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -65,13 +68,14 @@ def _post(path: str, json_body: dict, retries: int = 4) -> dict:
     last: Exception | None = None
     for i in range(retries):
         try:
-            r = requests.post(url, json=json_body, timeout=15)
+            r = get_session().post(url, json=json_body, timeout=15)
             if not r.ok:
                 raise requests.HTTPError(_extract_error(r), response=r)
             return r.json()
         except requests.HTTPError:
             raise  # no retry on HTTP errors
         except Exception as e:
+            raise_if_ssl_verify_error(e)
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]

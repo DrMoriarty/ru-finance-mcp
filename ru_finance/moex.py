@@ -10,10 +10,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-import requests as _requests
-
 from . import bonds as _bonds
-from .session import ISS, exec_template, first, get_moex, raw_get, records
+from .session import (
+    ISS, exec_template, first, get_moex, get_session, raise_if_ssl_verify_error, records,
+)
 
 # ID шаблонов ISS (определены интроспекцией aioboy/moex)
 T_SEARCH = 205   # /securities                                  (поиск)
@@ -1497,12 +1497,13 @@ def _fetch_correlations_page(start: int, retries: int = 4) -> list[dict]:
     last: Exception | None = None
     for i in range(retries):
         try:
-            r = _requests.get(url, params=params, timeout=30)
+            r = get_session().get(url, params=params, timeout=30)
             r.raise_for_status()
             b = r.json().get("coefficients") or {}
             cols = b.get("columns") or []
             return [dict(zip(cols, row, strict=False)) for row in (b.get("data") or [])]
         except Exception as e:
+            raise_if_ssl_verify_error(e)
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
