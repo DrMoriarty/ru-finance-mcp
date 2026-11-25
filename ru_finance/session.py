@@ -3,7 +3,11 @@
 aioboy/moex кэширует свои ~252 ISS-шаблона на уровне класса, поэтому они
 загружаются один раз глобально. Держим один открытый коннектор на всё время
 жизни MCP-сервера и добавляем свой цикл ретраев — iss.moex.com доступен, но
-капризен (случайные таймауты).
+капризен (случайные таймауты). Ретраятся только транзиентные ошибки
+(:func:`is_transient`): таймауты, обрывы соединения и HTTP 5xx — до 4 попыток
+с нарастающей паузой 0.5·(i+1) с. Детерминированные (SSL, HTTP 4xx, битый
+JSON, ошибки шаблонов aioboy) падают с первой попытки, обёрнутые в
+:exc:`NonRetryableError` (SSL verify — в :exc:`SSLVerifyFailed`).
 
 TLS / корпоративный MITM-прокси
 -------------------------------
@@ -52,6 +56,19 @@ _TRUE = {"1", "true", "yes", "on"}
 
 class SSLVerifyFailed(RuntimeError):
     """Проверка TLS-сертификата не прошла (обычно — корпоративный MITM-прокси)."""
+
+
+class NonRetryableError(RuntimeError):
+    """Детерминированная ошибка HTTP-запроса — повторы бессмысленны.
+
+    Поднимается вместо исходного исключения (которое сохранено как
+    ``__cause__``), чтобы вызывающий код сразу видел: ретраев не было и
+    не будет — 4xx, ошибка сертификата, битый JSON и т.п.
+    """
+
+
+class _InvalidResponse(Exception):
+    """aioboy/moex вернул None: ISS отдал не-200 или не-JSON (транзиентно)."""
 
 
 # ─────────────────────────── конфигурация TLS ───────────────────────────
@@ -166,6 +183,58 @@ def raise_if_ssl_verify_error(e: BaseException) -> None:
         ) from e
 
 
+# ─────────────────────────── классификация ошибок ───────────────────────────
+
+def _is_ssl_error(e: BaseException) -> bool:
+    """Любая TLS-ошибка (не только verify) в цепочке исключений.
+
+    Сюда попадают и CERTIFICATE_VERIFY_FAILED, и обычные handshake-сбои:
+    SSL-проблема конфигурации/прокси от повторов не исправляется.
+    """
+    seen: set[int] = set()
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, (ssl.SSLError,
+                          requests.exceptions.SSLError,
+                          niquests.exceptions.SSLError)):
+            return True
+        e = e.__cause__ or e.__context__
+    return False
+
+
+def is_transient(e: BaseException) -> bool:
+    """True, если ошибка транзиентная и запрос стоит повторить.
+
+    Ретраим только: таймауты, ошибки соединения (не SSL) и HTTP 5xx.
+    Всё остальное (4xx, SSL, битый JSON, ошибки шаблонов aioboy) —
+    детерминированное, результат повтора предсказуемо тот же.
+    """
+    if _is_ssl_error(e):
+        return False
+    if isinstance(e, _InvalidResponse):
+        # aioboy молча возвращает None на не-200/не-JSON — статус потерян,
+        # но ISS «капризен» именно такими ответами, считаем их временными
+        return True
+    # niquests (aioboy) и requests — разные иерархии классов, проверяем обе
+    if isinstance(e, (requests.exceptions.Timeout, niquests.exceptions.Timeout)):
+        return True
+    if isinstance(e, (requests.exceptions.ConnectionError,
+                      niquests.exceptions.ConnectionError)):
+        return True
+    status = getattr(getattr(e, "response", None), "status_code", None)
+    if status is not None:
+        return int(status) >= 500
+    return False
+
+
+def _fail_fast(e: Exception) -> None:
+    """Детерминированную ошибку поднять сразу, в понятной обёртке."""
+    raise NonRetryableError(
+        f"Детерминированная ошибка HTTP-запроса — ретраи не выполнялись: "
+        f"{type(e).__name__}: {e}"
+    ) from e
+
+
 # ─────────────────────────── aioboy/moex ───────────────────────────
 
 def _niquests_connector() -> niquests.Session:
@@ -205,9 +274,16 @@ def exec_template(template_id: int, vars: dict | None = None,
     for i in range(retries):
         try:
             url = c.render_url(template_id, **vars)
-            return c.execute(url, **params).raw
+            data = c.execute(url, **params)
+            if data is None:  # не-200/не-JSON: moex гасит статус и вернул None
+                raise _InvalidResponse(
+                    f"ISS вернул пустой ответ (не 200/JSON) для template {template_id}"
+                )
+            return data.raw
         except Exception as e:
             raise_if_ssl_verify_error(e)
+            if not is_transient(e):
+                _fail_fast(e)
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
@@ -226,6 +302,8 @@ def raw_get(path: str, params: dict | None = None, retries: int = 4) -> dict:
             return r.json()
         except Exception as e:
             raise_if_ssl_verify_error(e)
+            if not is_transient(e):
+                _fail_fast(e)
             last = e
             time.sleep(0.5 * (i + 1))
     raise last  # type: ignore[misc]
