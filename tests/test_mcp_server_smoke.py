@@ -8,8 +8,8 @@
   - присутствие якорных инструментов из всех 14 групп (см. AGENTS.md);
   - отсутствие дубликатов имён.
 
-Список инструментов берётся из публичного API FastMCP (`mcp.list_tools()`,
-mcp.server.fastmcp — официальный SDK, см. импорты mcp_server.py).
+Список инструментов берётся из публичного API MCPServer (`mcp.list_tools()`,
+mcp.server.mcpserver — официальный SDK (mcp>=2.0), см. импорты mcp_server.py).
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ ANCHOR_TOOLS: dict[str, set[str]] = {
 
 @pytest.fixture(scope="module")
 def tools() -> dict[str, object]:
-    """Зарегистрированные инструменты сервера: name → Tool (публичный API FastMCP)."""
+    """Зарегистрированные инструменты сервера: name → Tool (публичный API MCPServer)."""
     tool_list = asyncio.run(mcp.list_tools())
     return {t.name: t for t in tool_list}
 
@@ -74,7 +74,7 @@ def test_every_tool_has_name_description_schema(tools):
             continue
         if not (tool.description or "").strip():
             problems.append(f"{name}: пустое description")
-        schema = tool.inputSchema
+        schema = tool.input_schema  # mcp>=2.0 (mcp_types 2.x): бывший inputSchema
         if not isinstance(schema, dict) or schema.get("type") != "object":
             problems.append(f"{name}: пустая/некорректная inputSchema ({schema!r})")
     assert not problems, "Проблемные инструменты:\n" + "\n".join(problems)

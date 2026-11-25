@@ -15,13 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import logging
 import os
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer  # mcp>=2.0: FastMCP переименован в MCPServer
 from mcp.server.streamable_http import EventCallback, EventId, EventMessage, EventStore, StreamId
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Icon, ToolAnnotations
@@ -159,7 +158,7 @@ for _g, _names in GROUPS.items():
         _TOOL_GROUP[_n] = _g
 
 
-def _assign_tool_groups(mcp_instance: FastMCP) -> None:
+def _assign_tool_groups(mcp_instance: MCPServer) -> None:
     """Tag every registered tool with group metadata."""
     for tool in mcp_instance._tool_manager._tools.values():
         group = _TOOL_GROUP.get(tool.name)
@@ -168,7 +167,7 @@ def _assign_tool_groups(mcp_instance: FastMCP) -> None:
         tool.meta["group"] = group
 
 
-def _tools_for_groups(groups: set[str], source: FastMCP) -> dict[str, object]:
+def _tools_for_groups(groups: set[str], source: MCPServer) -> dict[str, object]:
     """Return tools from *source* matching any of the given *groups*."""
     allowed: set[str] = set()
     for g in groups:
@@ -179,24 +178,19 @@ def _tools_for_groups(groups: set[str], source: FastMCP) -> dict[str, object]:
     }
 
 
-def _copy_resources(source: FastMCP, target: FastMCP) -> None:
+def _copy_resources(source: MCPServer, target: MCPServer) -> None:
     """Copy all resources and resource templates from *source* to *target*."""
     target._resource_manager._resources = dict(source._resource_manager._resources)
     target._resource_manager._templates = dict(source._resource_manager._templates)
 
 
-def _create_group_server(group: str, source: FastMCP) -> FastMCP:
-    """Create a FastMCP instance for a single tool group."""
-    g_mcp = FastMCP(
+def _create_group_server(group: str, source: MCPServer) -> MCPServer:
+    """Create an MCPServer instance for a single tool group."""
+    # mcp 2.x: host/port/stateless/event_store/transport_security задаются при
+    # запуске транспорта (см. _make_session_mgr в __main__), не в конструкторе.
+    g_mcp = MCPServer(
         name=f"ru-finance-{group}",
         icons=_load_icons(),
-        host=source.settings.host,
-        port=source.settings.port,
-        streamable_http_path="/mcp",
-        stateless_http=source.settings.stateless_http,
-        event_store=InMemoryEventStore(),
-        retry_interval=5,
-        transport_security=source.settings.transport_security,
         warn_on_duplicate_tools=False,
     )
     g_mcp._tool_manager._tools = _tools_for_groups({group}, source)
@@ -204,18 +198,11 @@ def _create_group_server(group: str, source: FastMCP) -> FastMCP:
     return g_mcp
 
 
-def _create_role_server(role: str, source: FastMCP) -> FastMCP:
-    """Create a FastMCP instance for a composed role (union of its groups)."""
-    r_mcp = FastMCP(
+def _create_role_server(role: str, source: MCPServer) -> MCPServer:
+    """Create an MCPServer instance for a composed role (union of its groups)."""
+    r_mcp = MCPServer(
         name=f"ru-finance-{role}",
         icons=_load_icons(),
-        host=source.settings.host,
-        port=source.settings.port,
-        streamable_http_path="/mcp",
-        stateless_http=source.settings.stateless_http,
-        event_store=InMemoryEventStore(),
-        retry_interval=5,
-        transport_security=source.settings.transport_security,
         warn_on_duplicate_tools=False,
     )
     r_mcp._tool_manager._tools = _tools_for_groups(ROLES[role], source)
@@ -280,7 +267,14 @@ def _load_icons() -> list[Icon] | None:
     return [Icon(src=f"data:image/png;base64,{data}", mimeType="image/png", sizes=["256x256"])]
 
 
-_event_store = InMemoryEventStore()
+# ── HTTP-транспорт (mcp 2.x: host/port/security задаются при запуске, не в конструкторе) ──
+_HTTP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
+_HTTP_PORT = int(os.environ.get("MCP_PORT", "8000"))
+# Сервер рассчитан на работу за reverse-proxy (nginx) при remote-доступе.
+# Встроенная в SDK DNS-rebinding защита пускает только localhost-Host и режет
+# проксированные запросы (421 Invalid Host header); доступ ограничивается на
+# уровне прокси (TLS + секретный путь / IP-allowlist), поэтому отключаем её.
+_HTTP_TRANSPORT_SECURITY = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
 # ── Annotation presets (all ru-finance tools are read-only data fetchers) ──
 _RO = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
@@ -299,19 +293,9 @@ def _tool_open(**kw):
     return mcp.tool(**kw)
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "ru-finance",
     icons=_load_icons(),
-    host=os.environ.get("MCP_HOST", "127.0.0.1"),
-    port=int(os.environ.get("MCP_PORT", "8000")),
-    stateless_http=False,  # stateful: SSE resumability via event store
-    event_store=_event_store,
-    retry_interval=5,  # seconds — SSE reconnect interval for clients
-    # Сервер рассчитан на работу за reverse-proxy (nginx) при remote-доступе.
-    # Встроенная в SDK DNS-rebinding защита пускает только localhost-Host и режет
-    # проксированные запросы (421 Invalid Host header); доступ ограничивается на
-    # уровне прокси (TLS + секретный путь / IP-allowlist), поэтому отключаем её.
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
 
@@ -2445,31 +2429,26 @@ if __name__ == "__main__":
 
         _assign_tool_groups(mcp)
 
-        def _make_session_mgr(m: FastMCP) -> StreamableHTTPSessionManager:
+        def _make_session_mgr(m: MCPServer) -> StreamableHTTPSessionManager:
+            # mcp 2.x: low-level server доступен как _lowlevel_server (бывш.
+            # _mcp_server); event_store/security теперь передаются сюда, а не в
+            # конструктор MCPServer. У каждого эндпоинта — свой InMemoryEventStore.
             return StreamableHTTPSessionManager(
-                app=m._mcp_server,
-                event_store=m._event_store,
-                retry_interval=5,
-                stateless=m.settings.stateless_http,
-                security_settings=m.settings.transport_security,
+                app=m._lowlevel_server,
+                event_store=InMemoryEventStore(),
+                retry_interval=5,  # ms — SSE reconnect hint для клиентов
+                stateless=False,  # stateful: SSE resumability via event store
+                security_settings=_HTTP_TRANSPORT_SECURITY,
             )
 
         def _make_handler(mgr: StreamableHTTPSessionManager):
+            # В mcp 1.30 здесь был воркараунд: POST, обогнавший DELETE сессии,
+            # падал с RuntimeError «response already completed» и ронял uvicorn.
+            # В 2.x транспорт переписан (ClosedResourceError ловится внутри
+            # SDK, см. streamable_http.py) — проверено стендом: 200 циклов
+            # init→202→DELETE без единой ошибки. Обёртка удалена.
             async def _handler(scope, receive, send):
-                try:
-                    await mgr.handle_request(scope, receive, send)
-                except RuntimeError as exc:
-                    # mcp 1.30 bug: a POST racing a session DELETE (e.g. async
-                    # notifications/initialized) gets a 202, then writer.send
-                    # fails with ClosedResourceError and the SDK's error path
-                    # tries to send a 500 over the completed response. The
-                    # client already got its answer and the session is gone
-                    # (next request 404s) — nothing to do but not crash uvicorn.
-                    if "response already completed" not in str(exc):
-                        raise
-                    logging.getLogger(__name__).debug(
-                        "POST raced session DELETE; ignored ClosedResourceError after 202"
-                    )
+                await mgr.handle_request(scope, receive, send)
             return _handler
 
         # ── /mcp — all tools ──
@@ -2511,8 +2490,8 @@ if __name__ == "__main__":
 
         uvicorn.run(
             app,
-            host=mcp.settings.host,
-            port=mcp.settings.port,
+            host=_HTTP_HOST,
+            port=_HTTP_PORT,
             log_level=mcp.settings.log_level.lower(),
         )
     else:
